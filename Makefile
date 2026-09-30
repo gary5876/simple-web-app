@@ -41,3 +41,19 @@ $(NGINX_TEST_VENV)/bin/pytest: tests/nginx/requirements.txt
 
 test-nginx: $(NGINX_TEST_VENV)/bin/pytest
 	$(NGINX_TEST_VENV)/bin/pytest tests/nginx/test_config.py tests/nginx/test_routing.py tests/nginx/test_degraded.py tests/nginx/test_ratelimit.py -v
+
+# ---------- k8s ----------
+NS ?= simple-web-app
+K8S_VERSION ?= 1.31.0
+CRD_SCHEMA := https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
+KUBECONFORM := kubeconform -strict -summary -kubernetes-version $(K8S_VERSION) -schema-location default -schema-location '$(CRD_SCHEMA)'
+K8S_TARGETS := k8s/base
+
+.PHONY: k8s-validate
+# 렌더 결과를 먼저 변수에 담아 kustomize 실패가 파이프에 묻히지 않게 한다(macOS make 3.81은 .SHELLFLAGS 미지원).
+k8s-validate: ## 모든 kustomize 대상 렌더링 + 스키마 검증
+	@set -e; for t in $(K8S_TARGETS); do \
+		echo "== $$t"; \
+		out=$$(kubectl kustomize $$t) || exit 1; \
+		printf '%s\n' "$$out" | $(KUBECONFORM) || exit 1; \
+	done

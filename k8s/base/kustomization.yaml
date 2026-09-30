@@ -1,0 +1,38 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: simple-web-app
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: simple-web-app
+    includeSelectors: false
+resources:
+  - namespace.yaml
+  - nginx.yaml
+  - auth.yaml
+  - board-api.yaml
+  - board-worker.yaml
+  - db-migrate.yaml
+configMapGenerator:
+  - name: app-config
+    literals:
+      - SESSION_TTL_SECONDS=86400
+      - QUEUE_MAX_LEN=50000
+      - COOKIE_SECURE=true
+      - LOG_LEVEL=INFO
+  - name: nginx-config
+    literals:
+      - AUTH_UPSTREAM=auth:8000
+      - BOARD_UPSTREAM=board-api:8000
+      - REAL_IP_FROM=127.0.0.1/32
+      # nginx limit_req 존은 Pod(replica)마다 따로 존재한다. HPA가 nginx를 2~10개로 늘리면
+      # 실효 한도는 대략 rate x replicas 로 느슨해진다. BURST_* 도 마찬가지다.
+      # RATE_LOGIN/BURST_LOGIN 은 auth_sensitive 존(DELETE /api/auth/me)에도 함께 적용된다.
+      - RATE_READ=100r/s
+      - BURST_READ=200
+      - RATE_WRITE=2r/s
+      - BURST_WRITE=5
+      - RATE_LOGIN=30r/m
+      - BURST_LOGIN=10
+      # worker_processes를 cgroup CPU 제한에 맞춘다(500m -> 1). nginx.conf가 쓰기 가능해야 동작하므로
+      # nginx Deployment의 readOnlyRootFilesystem은 꺼 둔 채로 유지한다.
+      - NGINX_ENTRYPOINT_WORKER_PROCESSES_AUTOTUNE=1
