@@ -1,0 +1,21 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: simple-web-app
+resources:
+  - ../local
+components:
+  - ../../components/keda-worker
+# 부하 테스트는 PC 한 대(IP 하나)에서 실행되므로 IP 기준 리밋을 완화한다.
+#  - 로그인/가입: 30r/m 그대로면 k6 setup의 500명 가입과 로그인 5%가 전부 429가 된다.
+#  - 읽기: nginx limit_req 존은 Pod마다 따로라서 100r/s x replicas 가 상한이다. 단일 IP k6가
+#    이 상한에 걸리면 board-api HPA가 늘어날 만큼의 부하가 도달하지 못한다. 그래서 10000r/s로 올린다.
+# 글쓰기(세션 쿠키 sid별 2r/s) 리밋은 그대로 둔다. 쓰기 429는 k6가 rate_limited_429로 따로 집계한다.
+# RATE_LOGIN/BURST_LOGIN 은 auth_sensitive 존(DELETE /api/auth/me)에도 적용된다.
+configMapGenerator:
+  - name: nginx-config
+    behavior: merge
+    literals:
+      - RATE_LOGIN=6000r/m
+      - BURST_LOGIN=1000
+      - RATE_READ=10000r/s
+      - BURST_READ=20000

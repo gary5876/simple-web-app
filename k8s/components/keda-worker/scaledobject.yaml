@@ -1,0 +1,38 @@
+# KEDA는 ScaledObject마다 자체 HPA(keda-hpa-board-worker)를 만든다.
+# 그래서 이 component는 base의 CPU HPA(board-worker)를 함께 삭제한다.
+# streamLength: worker가 처리한 항목을 XACK 후 XDEL 하므로 XLEN posts:stream = 밀린 작업량.
+# 목표 500 = worker 1개당 밀린 메시지 500건. 클라우드에서는 address를 매니지드 Redis 주소로 패치한다.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: board-worker
+  labels:
+    app.kubernetes.io/name: board-worker
+spec:
+  scaleTargetRef:
+    name: board-worker
+  minReplicaCount: 1
+  maxReplicaCount: 10
+  pollingInterval: 5
+  cooldownPeriod: 300
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 0
+          policies:
+            - type: Percent
+              value: 100
+              periodSeconds: 15
+        scaleDown:
+          stabilizationWindowSeconds: 300
+          policies:
+            - type: Percent
+              value: 50
+              periodSeconds: 60
+  triggers:
+    - type: redis-streams
+      metadata:
+        address: redis.simple-web-app.svc.cluster.local:6379
+        stream: posts:stream
+        streamLength: "500"

@@ -47,7 +47,7 @@ NS ?= simple-web-app
 K8S_VERSION ?= 1.31.0
 CRD_SCHEMA := https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
 KUBECONFORM := kubeconform -strict -summary -kubernetes-version $(K8S_VERSION) -schema-location default -schema-location '$(CRD_SCHEMA)'
-K8S_TARGETS := k8s/base k8s/overlays/local
+K8S_TARGETS := k8s/base k8s/overlays/local k8s/overlays/local-loadtest
 
 .PHONY: k8s-validate
 # 렌더 결과를 먼저 변수에 담아 kustomize 실패가 파이프에 묻히지 않게 한다(macOS make 3.81은 .SHELLFLAGS 미지원).
@@ -95,3 +95,20 @@ k8s-smoke: ## 로컬 클러스터 스모크 테스트
 
 k8s-down: ## kind 클러스터 삭제
 	kind delete cluster --name $(KIND_CLUSTER)
+
+KEDA_URL := https://github.com/kedacore/keda/releases/download/v2.19.0/keda-2.19.0.yaml
+
+.PHONY: k8s-keda-install k8s-local-loadtest
+k8s-keda-install: ## 현재 kubectl 컨텍스트에 KEDA 설치 (v2.19: k8s 1.32~1.34 지원)
+	kubectl apply --server-side -f $(KEDA_URL)
+	kubectl -n keda rollout status deployment/keda-operator --timeout=180s
+	kubectl -n keda rollout status deployment/keda-metrics-apiserver --timeout=180s
+	kubectl -n keda rollout status deployment/keda-admission --timeout=180s
+
+k8s-local-loadtest: ## kind에 부하 테스트용 overlay 배포 (KEDA 포함, 로그인·읽기 IP 리밋 완화)
+	@kind get clusters 2>/dev/null | grep -qx $(KIND_CLUSTER) || \
+		kind create cluster --name $(KIND_CLUSTER) --config k8s/kind/cluster.yaml
+	$(MAKE) k8s-keda-install
+	@# KEDA가 만드는 HPA와 충돌하지 않도록 base의 CPU HPA를 먼저 지운다.
+	-kubectl -n $(NS) delete hpa board-worker --ignore-not-found
+	$(MAKE) k8s-local LOCAL_OVERLAY=local-loadtest
