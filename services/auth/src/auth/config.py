@@ -9,3 +9,4 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     login_fail_limit: int = 10
     login_fail_window_seconds: int = 900
+    hash_concurrency: int = 4

@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from auth import health, routes
+from auth import health, passwords, routes
 from auth.config import Settings
 from auth.errors import install_error_handlers
 from auth.infra import make_engine, make_redis
@@ -12,6 +12,7 @@ from auth.observability import RequestContextMiddleware, configure_logging, inst
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
     configure_logging(settings.log_level)
+    passwords.configure(settings.hash_concurrency)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
