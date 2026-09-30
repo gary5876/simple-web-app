@@ -1,0 +1,45 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: simple-web-app
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: simple-web-app
+    includeSelectors: false
+resources:
+  - ../../base
+  - postgres.yaml
+  - redis.yaml
+  - networkpolicy-data.yaml
+patches:
+  - path: nginx-service-patch.yaml
+  - path: resources-patch.yaml
+configMapGenerator:
+  - name: app-config
+    behavior: merge
+    literals:
+      - COOKIE_SECURE=false
+secretGenerator:
+  - name: app-db
+    literals:
+      - DATABASE_URL=postgresql+asyncpg://app:app@postgres:5432/app
+    options:
+      disableNameSuffixHash: true
+  - name: app-redis
+    literals:
+      - REDIS_URL=redis://redis:6379/0
+    options:
+      disableNameSuffixHash: true
+  - name: postgres-credentials
+    literals:
+      - POSTGRES_USER=app
+      - POSTGRES_PASSWORD=app
+      - POSTGRES_DB=app
+    options:
+      disableNameSuffixHash: true
+images:
+  - name: simple-web-app/frontend
+    newTag: dev
+  - name: simple-web-app/auth
+    newTag: dev
+  - name: simple-web-app/board
+    newTag: dev
