@@ -19,6 +19,6 @@ configMapGenerator:
       - BURST_LOGIN=1000
       - RATE_READ=10000r/s
       - BURST_READ=20000
-# 노트북용 HPA 상한과 auth 요청량 복원. 이유는 laptop-caps-patch.yaml 참고.
+# 노트북용 HPA 상한과 auth CPU 요청량 복원. 이유는 laptop-caps-patch.yaml 참고.
 patches:
   - path: laptop-caps-patch.yaml

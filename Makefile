@@ -118,10 +118,10 @@ K6_ARGS ?=
 
 .PHONY: loadtest loadtest-quick loadtest-local
 loadtest: ## k6 재난 시나리오 (약 14분). 먼저 make k8s-local-loadtest
-	k6 run -e BASE_URL=$(BASE_URL) $(K6_ARGS) loadtest/disaster.js
+	k6 run -e BASE_URL=$(BASE_URL) $(if $(USERS),-e USERS=$(USERS)) $(if $(PEAK),-e PEAK=$(PEAK)) $(K6_ARGS) loadtest/disaster.js
 
 loadtest-quick: ## 단축 시나리오 (약 1분 30초, 동작 확인용)
-	k6 run -e BASE_URL=$(BASE_URL) -e QUICK=1 $(K6_ARGS) loadtest/disaster.js
+	k6 run -e BASE_URL=$(BASE_URL) -e QUICK=1 $(if $(USERS),-e USERS=$(USERS)) $(if $(PEAK),-e PEAK=$(PEAK)) $(K6_ARGS) loadtest/disaster.js
 
 loadtest-local: ## 노트북용 축소판 (약 14분, USERS=60 PEAK=80). 클라우드 임계치는 그대로
-	k6 run -e BASE_URL=$(BASE_URL) -e PROFILE=local $(if $(PEAK),-e PEAK=$(PEAK)) $(K6_ARGS) loadtest/disaster.js
+	k6 run -e BASE_URL=$(BASE_URL) -e PROFILE=local $(if $(USERS),-e USERS=$(USERS)) $(if $(PEAK),-e PEAK=$(PEAK)) $(K6_ARGS) loadtest/disaster.js

@@ -36,8 +36,9 @@ metadata:
 spec:
   maxReplicaCount: 4
 ---
-# auth는 요청량을 절반으로 줄이지 않고 base 값(250m/256Mi)을 그대로 쓴다.
+# auth는 CPU 요청량만 base 값(250m)으로 되돌린다.
 # argon2가 CPU를 많이 쓰므로 요청량이 작으면 HPA의 CPU %가 실제보다 크게 나와 과하게 늘어난다(폭주).
+# 메모리 요청량은 local overlay의 절반 값(128Mi)을 유지한다. 3.8GiB VM에서 스케줄링 여유를 남기기 위해서다.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -50,4 +51,3 @@ spec:
           resources:
             requests:
               cpu: 250m
-              memory: 256Mi
