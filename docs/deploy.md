@@ -128,11 +128,11 @@ patches:
 | auth-verify | 10 | 10 | 100 |
 | board-api | 20 | 10 | 200 |
 | board-worker | 10 | 10 | 100 |
-| db-migrate Job | 1 | 10 | 10 |
-| **합계** | | | **610** |
+| db-migrate Job | 1 | 1 (`asyncpg.connect()` 단일 연결) | 1 |
+| **합계** | | | **601** |
 
-- Postgres `max_connections`는 **650 이상**으로 설정한다(610 + 관리·모니터링 여유분). 풀은 필요할 때 커넥션을 만들므로 평상시에는 훨씬 적게 쓴다. 최악 상황 대비 값이다.
-- local overlay의 `max_connections=600`은 노트북에서 HPA 최대값까지 갈 수 없다는 전제이다(local-loadtest는 상한을 낮춘다). 클라우드에는 쓰지 않는다.
+- Postgres `max_connections`는 **650 이상**으로 설정한다(601 + 관리·모니터링 여유분). 풀은 필요할 때 커넥션을 만들므로 평상시에는 훨씬 적게 쓴다. 최악 상황 대비 값이다.
+- 일반 `local` overlay는 base의 `maxReplicas`를 그대로 유지하고, `local-loadtest`만 상한을 낮춘다(auth 4, auth-verify 4, board-api 6, nginx 4, worker 4). `local`의 `max_connections=600`은 노트북 자원으로는 HPA 최대값(601)까지 갈 수 없다는 전제이며 클라우드에는 쓰지 않는다.
 - RDS/Cloud SQL 인스턴스 크기에 따라 기본 `max_connections`가 이보다 작을 수 있다. 이때는 파라미터를 올리거나, RDS Proxy / PgBouncer를 두고 `DATABASE_URL`을 프록시 주소로 바꾼다.
 - HPA `maxReplicas`(`k8s/base/hpa.yaml`)나 풀 크기를 바꾸면 이 표도 다시 계산한다.
 - 로그인 부하: argon2는 `parallelism=1`이고 Pod당 동시 해시 수는 `HASH_CONCURRENCY=4`(기본값)로 제한한다. 해시가 몰려도 Pod 하나가 CPU와 메모리(limit 512Mi)를 무한정 쓰지 않는다. 기존 parallelism=4로 만든 해시도 계속 검증된다.

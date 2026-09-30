@@ -44,7 +44,7 @@ test-nginx: $(NGINX_TEST_VENV)/bin/pytest
 
 # ---------- k8s ----------
 NS ?= simple-web-app
-K8S_VERSION ?= 1.31.0
+K8S_VERSION ?= 1.34.0
 CRD_SCHEMA := https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
 KUBECONFORM := kubeconform -strict -summary -kubernetes-version $(K8S_VERSION) -schema-location default -schema-location '$(CRD_SCHEMA)'
 K8S_TARGETS := k8s/base k8s/overlays/local k8s/overlays/local-loadtest k8s/overlays/aws k8s/overlays/gcp
