@@ -13,25 +13,68 @@
 
 | 자리표시자 | 위치 | 예시 값 |
 |---|---|---|
-| ECR 계정 ID / 리전 | `k8s/overlays/aws/kustomization.yaml` `images` | `123456789012`, `ap-northeast-2` |
-| Artifact Registry 프로젝트 / 리전 | `k8s/overlays/gcp/kustomization.yaml` `images` | `my-gcp-project`, `asia-northeast3` |
-| 도메인 | 각 overlay `ingress.yaml`의 host, GCP `managedcertificate.yaml` | `board.example.com` |
-| ACM 인증서 ARN | `k8s/overlays/aws/ingress.yaml` `certificate-arn` | `arn:aws:acm:...:certificate/0000...` |
-| VPC CIDR | `k8s/overlays/aws/kustomization.yaml` `REAL_IP_FROM` | `10.0.0.0/16` |
-| GCP LB 전역 고정 IP (`simple-web-app-ip`) | `k8s/overlays/gcp/kustomization.yaml` `REAL_IP_FROM` 끝의 `/32` | `203.0.113.10/32` |
+| ECR 계정 ID / 리전 | `k8s/overlays/aws/{prod,dev}/kustomization.yaml` `images` | `123456789012`, `ap-northeast-2` |
+| Artifact Registry 프로젝트 / 리전 | `k8s/overlays/gcp/{prod,dev}/kustomization.yaml` `images` | `my-gcp-project`, `asia-northeast3` |
+| 도메인 (prod) | `aws/base/ingress.yaml`·`gcp/base/ingress.yaml`의 host, `gcp/prod/managedcertificate.yaml` | `board.example.com` |
+| 도메인 (dev) | `aws/dev`·`gcp/dev` kustomization의 Ingress 패치, `gcp/dev/managedcertificate.yaml` | `dev.board.example.com` |
+| ACM 인증서 ARN (prod) | `k8s/overlays/aws/base/ingress.yaml` `certificate-arn` | `arn:aws:acm:...:certificate/0000...` |
+| ACM 인증서 ARN (dev) | `k8s/overlays/aws/dev/kustomization.yaml` Ingress 패치 | `arn:aws:acm:...:certificate/1111...` |
+| VPC CIDR | `k8s/overlays/aws/base/kustomization.yaml` `REAL_IP_FROM` | `10.0.0.0/16` |
+| GCP LB 전역 고정 IP (prod, `simple-web-app-ip`) | `k8s/overlays/gcp/base/kustomization.yaml` `REAL_IP_FROM` 끝의 `/32` | `203.0.113.10/32` |
+| GCP LB 전역 고정 IP (dev, `simple-web-app-dev-ip`) | `k8s/overlays/gcp/dev/kustomization.yaml` `REAL_IP_FROM` 끝의 `/32` | `203.0.113.20/32` |
 
 ## overlay 목록
 | overlay | 용도 | Postgres/Redis | worker 확장 |
 |---|---|---|---|
 | `k8s/overlays/local` | kind 로컬 실행 | 클러스터 내부 StatefulSet | CPU HPA |
 | `k8s/overlays/local-loadtest` | 로컬 부하 테스트 (IP 리밋 완화, HPA 상한 축소) | 클러스터 내부 StatefulSet | KEDA (스트림 길이) |
-| `k8s/overlays/aws` | EKS | RDS, ElastiCache (Terraform) | CPU HPA (KEDA 선택) |
-| `k8s/overlays/gcp` | GKE | Cloud SQL, Memorystore (Terraform) | CPU HPA (KEDA 선택) |
+| `k8s/overlays/aws/prod` | EKS 운영 (`main`) | RDS, ElastiCache (Terraform) | CPU HPA (KEDA 선택) |
+| `k8s/overlays/aws/dev` | EKS 개발 (`develop`) | RDS, ElastiCache (Terraform, prod와 별도 인스턴스) | CPU HPA (KEDA 선택) |
+| `k8s/overlays/gcp/prod` | GKE 운영 (`main`) | Cloud SQL, Memorystore (Terraform) | CPU HPA (KEDA 선택) |
+| `k8s/overlays/gcp/dev` | GKE 개발 (`develop`) | Cloud SQL, Memorystore (Terraform, prod와 별도 인스턴스) | CPU HPA (KEDA 선택) |
+
+`k8s/overlays/{aws,gcp}/base`는 prod/dev가 공유하는 클라우드별 조각(Ingress, `REAL_IP_FROM`, GCP BackendConfig/FrontendConfig/NEG 패치)이며 직접 apply하지 않는다. dev 공통 설정은 `k8s/components/dev-env` component에 있다.
 
 워크로드: `nginx`, `auth`, `auth-verify`, `board-api`, `board-worker`, Job `db-migrate`.
 
 ### auth-verify를 따로 둔 이유
 nginx는 보호된 요청마다 `auth_request`로 세션을 검증한다(`VERIFY_UPSTREAM=auth-verify:8000`). 이 검증이 로그인·가입(argon2 해시, CPU 집약)과 같은 Pod를 쓰면, 로그인 폭주 때 해시가 CPU를 다 써서 세션 검증이 밀리고 모든 요청이 지연된다. 그래서 `auth-verify` Deployment를 분리했다. 같은 auth 이미지이지만 검증 경로만 받으며, HPA(2~10, CPU 60%)와 PDB(`minAvailable: 1`)를 따로 가진다. `/internal/verify`는 NetworkPolicy로 nginx Pod에서만 닿는다.
+
+## 환경 (dev/prod)
+클라우드마다 dev와 prod 두 환경을 둔다. prod overlay는 분리 전의 `overlays/aws`·`overlays/gcp`와 렌더 결과가 같다.
+
+| 항목 | prod | dev |
+|---|---|---|
+| 배포 브랜치 | `main` | `develop` |
+| overlay | `k8s/overlays/{aws,gcp}/prod` | `k8s/overlays/{aws,gcp}/dev` |
+| 네임스페이스 | `simple-web-app` | `simple-web-app-dev` |
+| 도메인 | `board.example.com` | `dev.board.example.com` |
+| 인증서 | AWS: ACM ARN(prod) / GCP: ManagedCertificate `web-cert` | AWS: ACM ARN(dev) / GCP: ManagedCertificate `web-cert-dev` |
+| GCP 전역 고정 IP | `simple-web-app-ip` | `simple-web-app-dev-ip` |
+| `LOG_LEVEL` | `INFO` | `DEBUG` |
+| HPA (min~max) | nginx 2~10, auth 2~20, auth-verify 2~10, board-api 2~20, board-worker 1~10 | nginx 1~2, auth 2~2, auth-verify 1~2, board-api 1~3, board-worker 1~2 |
+| PDB | `minAvailable: 1` (worker만 `maxUnavailable: 1`) | 모두 `maxUnavailable: 1` (replica 1개여도 drain이 막히지 않음) |
+| 리소스 requests | base 값 | base의 절반 (limits는 같음) |
+| 이미지 태그 | 예시 `0.1.0` | 자리표시자 `dev` |
+| DB 커넥션 최악값 | 601 (아래 계산) | 91 (9 Pod x 10 + migrate 1) |
+
+- **브랜치와 배포:** 이 저장소의 CI(`.github/workflows/ci.yml`)는 테스트와 이미지 빌드만 한다(푸시·배포 없음). 배포는 인프라 프로젝트(`one-click-deploy-k8s`)의 파이프라인이 맡으며, `develop` → dev overlay, `main` → prod overlay로 매핑한다. 파이프라인은 overlay 디렉터리에서 `kustomize edit set image`로 커밋 sha 태그를 넣는다(아래 절차 2). 이미지 이름 매칭 때문에 레지스트리 주소(`images`)는 base가 아니라 prod/dev overlay에 있다.
+- **Secret:** 이름은 두 환경 모두 `app-db`(`DATABASE_URL`), `app-redis`(`REDIS_URL`)로 같다. Terraform이 네임스페이스마다 따로 만들고, dev Secret에는 dev용 DB/Redis 주소를 넣는다.
+- **같은 클러스터에 두 환경을 둘 때:** 네임스페이스로 나뉘므로 이름이 겹치지 않는다. NetworkPolicy는 `podSelector`만 쓰므로 자기 네임스페이스 안에서만 적용되고, 다른 환경의 Pod는 앱 서비스에 닿지 못한다. AWS에서는 Ingress마다 ALB가 따로 생긴다.
+- **KEDA component:** `components/keda-worker`의 Redis 주소 기본값은 `redis.simple-web-app.svc.cluster.local`(local 전용)이다. 클라우드에서는 prod/dev 모두 아래 KEDA 절의 패치로 해당 환경의 Redis 주소를 넣는다.
+
+환경별 Terraform 입력:
+
+| 입력 | prod | dev |
+|---|---|---|
+| 네임스페이스 (먼저 생성) | `simple-web-app` | `simple-web-app-dev` |
+| Secret `app-db`, `app-redis` | prod DB/Redis 주소 | dev DB/Redis 주소 |
+| Postgres 인스턴스 (RDS / Cloud SQL) | prod 전용, `max_connections` ≥ 650 | dev 전용 (작은 인스턴스 가능, 커넥션 최악값 91) |
+| Redis 인스턴스 (ElastiCache / Memorystore) | prod 전용, 7 이상, `noeviction` | dev 전용, 7 이상, `noeviction` |
+| 도메인 | `board.example.com` | `dev.board.example.com` |
+| 인증서 | ACM ARN(prod) / GCP는 ManagedCertificate가 발급 | ACM ARN(dev) / 동일 |
+| GCP 전역 고정 IP | `simple-web-app-ip` | `simple-web-app-dev-ip` |
+| AWS 네임스페이스 라벨 | `elbv2.k8s.aws/pod-readiness-gate-inject=enabled` | 동일 |
 
 ## 로컬
 ```bash
@@ -59,7 +102,9 @@ docker push $REGISTRY/simple-web-app/board:$TAG
 docker push $REGISTRY/simple-web-app/frontend:$TAG
 
 # 2. 이미지 지정 (overlay 디렉터리에서, kustomize CLI 필요)
-cd k8s/overlays/aws   # 또는 gcp
+OVERLAY=k8s/overlays/aws/prod   # aws/dev, gcp/prod, gcp/dev
+NS=simple-web-app               # dev는 simple-web-app-dev
+cd $OVERLAY
 kustomize edit set image \
   simple-web-app/auth=$REGISTRY/simple-web-app/auth:$TAG \
   simple-web-app/board=$REGISTRY/simple-web-app/board:$TAG \
@@ -67,29 +112,29 @@ kustomize edit set image \
 cd -
 
 # 3. 네임스페이스와 Secret 준비 (Terraform이 생성).
-#    Terraform이 simple-web-app 네임스페이스를 먼저 만들고, 그 안에 app-db(DATABASE_URL), app-redis(REDIS_URL)를 만든다.
-#    (base의 namespace.yaml도 같은 네임스페이스를 선언하지만, apply는 이미 있는 네임스페이스를 갱신만 한다.)
-kubectl get namespace simple-web-app
-kubectl -n simple-web-app get secret app-db app-redis
+#    Terraform이 $NS 네임스페이스를 먼저 만들고, 그 안에 app-db(DATABASE_URL), app-redis(REDIS_URL)를 만든다.
+#    (base의 namespace.yaml도 같은 네임스페이스를 선언하지만(overlay의 namespace로 이름이 바뀜), apply는 이미 있는 네임스페이스를 갱신만 한다.)
+kubectl get namespace $NS
+kubectl -n $NS get secret app-db app-redis
 
 # 4. 렌더링·스키마 검증 (저장소 루트에서, kubeconform 필요)
 make k8s-validate
 
 # 5. 적용 -> 마이그레이션 대기(실패하면 로그를 찍고 즉시 중단) -> 롤아웃 대기
-kubectl -n simple-web-app delete job db-migrate --ignore-not-found --wait=true
-kubectl apply -k k8s/overlays/aws
+kubectl -n $NS delete job db-migrate --ignore-not-found --wait=true
+kubectl apply -k $OVERLAY
 ( # 서브셸: exit가 현재 터미널을 닫지 않게 한다
   for i in $(seq 1 122); do
-    st=$(kubectl -n simple-web-app get job db-migrate -o jsonpath='{range .status.conditions[?(@.status=="True")]}{.type}{" "}{end}')
+    st=$(kubectl -n $NS get job db-migrate -o jsonpath='{range .status.conditions[?(@.status=="True")]}{.type}{" "}{end}')
     case " $st" in
       *" Complete "*) echo "db-migrate complete"; exit 0;;
-      *" Failed "*) echo "db-migrate FAILED"; kubectl -n simple-web-app logs job/db-migrate --all-containers --tail=200; exit 1;;
+      *" Failed "*) echo "db-migrate FAILED"; kubectl -n $NS logs job/db-migrate --all-containers --tail=200; exit 1;;
     esac
     sleep 5
   done
-  echo "db-migrate timed out"; kubectl -n simple-web-app logs job/db-migrate --all-containers --tail=200; exit 1
+  echo "db-migrate timed out"; kubectl -n $NS logs job/db-migrate --all-containers --tail=200; exit 1
 ) && for d in nginx auth auth-verify board-api board-worker; do
-  kubectl -n simple-web-app rollout status deployment/$d --timeout=300s
+  kubectl -n $NS rollout status deployment/$d --timeout=300s
 done
 ```
 Job의 Pod 템플릿은 변경할 수 없으므로, 기존 Job을 지운 뒤 적용한다. `kubectl wait --for=condition=complete`만 쓰면 Job이 실패해도 타임아웃까지 기다리므로, Complete/Failed 중 먼저 오는 쪽을 본다(`make k8s-local`도 같은 방식).
@@ -99,8 +144,9 @@ nginx Pod가 종료될 때 LB가 먼저 그 Pod로 요청을 그만 보내야 �
 - **AWS:** Ingress에 `alb.ingress.kubernetes.io/target-group-attributes: deregistration_delay.timeout_seconds=30`. 새 Pod가 ALB 타깃으로 healthy가 된 뒤에 이전 Pod를 내리도록, **네임스페이스에 pod readiness gate 주입 라벨을 붙인다**(AWS Load Balancer Controller 기능):
   ```bash
   kubectl label namespace simple-web-app elbv2.k8s.aws/pod-readiness-gate-inject=enabled
+  kubectl label namespace simple-web-app-dev elbv2.k8s.aws/pod-readiness-gate-inject=enabled
   ```
-  라벨은 Pod가 생성될 때 적용되므로, 첫 배포 전에 붙이거나 붙인 뒤 `kubectl -n simple-web-app rollout restart deployment nginx`를 한다. Terraform이 네임스페이스를 만들 때 라벨을 함께 달아도 된다.
+  라벨은 Pod가 생성될 때 적용되므로, 첫 배포 전에 붙이거나 붙인 뒤 `kubectl -n <네임스페이스> rollout restart deployment nginx`를 한다. Terraform이 네임스페이스를 만들 때 라벨을 함께 달아도 된다.
 - **GCP:** `BackendConfig` `nginx-backendconfig`의 `connectionDraining.drainingTimeoutSec: 30`. 컨테이너 네이티브 LB(NEG)는 Pod readiness gate를 자동으로 주입한다.
 - 존 분산: nginx, auth, auth-verify, board-api는 `topologySpreadConstraints`(`topology.kubernetes.io/zone`, maxSkew 1, `ScheduleAnyway`)로 존에 고르게 퍼진다. 존이 하나뿐이면 제약 없이 스케줄된다.
 
@@ -132,7 +178,7 @@ nginx Pod가 종료될 때 LB가 먼저 그 Pod로 요청을 그만 보내야 �
 - 기본값: 읽기 100r/s(burst 200), 글쓰기 2r/s(burst 5), 로그인 30r/m(burst 10).
 
 ### KEDA를 쓰는 경우
-KEDA v2.19.0은 k8s 1.32~1.34를 지원한다. 로컬은 `make k8s-keda-install`로 설치한다. 클라우드 overlay에서 `components` 주석을 풀면 CPU HPA(`board-worker`)가 삭제되고 `ScaledObject`가 대신 HPA를 만든다. 트리거는 `redis-streams`의 `streamLength: 500`(worker가 XACK + XDEL 하므로 `XLEN posts:stream` = 밀린 작업량)이고 min 1 / max 10이다. overlay의 `patches`에 Redis 주소를 지정한다.
+KEDA v2.19.0은 k8s 1.32~1.34를 지원한다. 로컬은 `make k8s-keda-install`로 설치한다. 클라우드 prod/dev overlay에 `components: [../../../components/keda-worker]`를 추가하면(`{aws,gcp}/base` 주석 참고) CPU HPA(`board-worker`)가 삭제되고 `ScaledObject`가 대신 HPA를 만든다. 트리거는 `redis-streams`의 `streamLength: 500`(worker가 XACK + XDEL 하므로 `XLEN posts:stream` = 밀린 작업량)이고 min 1 / max 10이다. overlay의 `patches`에 Redis 주소를 지정한다.
 ```yaml
 patches:
   - target:
@@ -177,3 +223,4 @@ patches:
 10. **인프라 계약 추가:** 도메인·인증서, GCP 전역 고정 IP, `monitoring` 네임스페이스 이름, Redis `noeviction`과 7 이상, HTTPS 필수, `REAL_IP_FROM` 규칙.
 11. **local-loadtest overlay:** 한 PC(IP 하나)에서 부하를 낼 수 있도록 읽기·로그인 IP 리밋을 완화하고 HPA 상한을 낮춘다. 클라우드 리밋과 비교할 수 없다.
 12. **nginx preStop 15s (spec 5s):** LB가 종료 중인 Pod를 대상에서 빼는 데 걸리는 시간(ALB 타깃 해제, NEG 갱신)을 덮기 위해 늘렸다. LB 드레이닝은 30초(AWS `deregistration_delay`, GCP `connectionDraining`)이고 `terminationGracePeriodSeconds`는 30초이다.
+13. **dev/prod 환경 분리:** 스펙에 없던 클라우드별 dev 환경을 추가했다(`{aws,gcp}/dev`, 네임스페이스 `simple-web-app-dev`). 차이는 위 "환경 (dev/prod)" 절을 본다.
