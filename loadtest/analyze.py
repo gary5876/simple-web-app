@@ -114,10 +114,22 @@ def percentile(values: list[float], pct: float) -> float:
     return ordered[k]
 
 
+def main_cluster(times: list[float], gap: float = 10.0) -> tuple[float, float]:
+    """단계 하나의 요청 시각 중 가장 큰 연속 구간. 다른 실행에서 섞여 든 요청(같은 단계 태그)을 걸러 낸다."""
+    times = sorted(times)
+    best = (times[0], times[0], 1)
+    start, count = times[0], 1
+    for prev, cur in zip(times, times[1:]):
+        if cur - prev > gap:
+            start, count = cur, 0
+        count += 1
+        if count > best[2]:
+            best = (start, cur, count)
+    return best[0], best[1]
+
+
 def load_nginx(path: str):
-    groups: dict[tuple[int, str], list[dict]] = defaultdict(list)
-    errors: dict[tuple[int, str], dict[int, int]] = defaultdict(lambda: defaultdict(int))
-    window: dict[int, list[float]] = {}
+    lines: list[dict] = []
     with open(path, encoding="utf-8") as f:
         for raw in f:
             raw = raw.strip()
@@ -128,19 +140,31 @@ def load_nginx(path: str):
                 line = json.loads(raw[start:])
             except json.JSONDecodeError:
                 continue
-            step, op = line.get("step", ""), line.get("op", "")
-            if not step or op not in OPS:
-                continue
-            key = (int(step), op)
-            ts = float(line["ts"])
-            lo_hi = window.setdefault(key[0], [ts, ts])
-            lo_hi[0], lo_hi[1] = min(lo_hi[0], ts), max(lo_hi[1], ts)
-            if line["status"] >= 400:
-                errors[key][line["status"]] += 1
-                continue
-            parts = decompose(line)
-            if parts is not None:
-                groups[key].append(parts)
+            if line.get("step") and line.get("op") in OPS:
+                lines.append(line)
+
+    by_step: dict[int, list[float]] = defaultdict(list)
+    for line in lines:
+        by_step[int(line["step"])].append(float(line["ts"]))
+    window = {step: list(main_cluster(times)) for step, times in by_step.items()}
+
+    groups: dict[tuple[int, str], list[dict]] = defaultdict(list)
+    errors: dict[tuple[int, str], dict[int, int]] = defaultdict(lambda: defaultdict(int))
+    dropped = 0
+    for line in lines:
+        key = (int(line["step"]), line["op"])
+        lo, hi = window[key[0]]
+        if not lo <= float(line["ts"]) <= hi:
+            dropped += 1
+            continue
+        if line["status"] >= 400:
+            errors[key][line["status"]] += 1
+            continue
+        parts = decompose(line)
+        if parts is not None:
+            groups[key].append(parts)
+    if dropped:
+        print(f"참고: 단계 구간 밖 요청 {dropped}건을 제외했습니다(다른 실행에서 섞인 요청).", file=sys.stderr)
     return groups, errors, window
 
 
@@ -275,7 +299,7 @@ def main() -> int:
             )
 
     w("\n## 2. 평균 응답시간 분해 (ms)\n")
-    w("각 칸을 더하면 맨 오른쪽 합계가 됩니다. 합계는 k6 평균(없으면 nginx 평균)입니다.\n")
+    w("각 칸을 더하면 맨 오른쪽 합계가 됩니다. 합계는 k6 평균이고, k6 요약이 없거나 에러가 섞인 그룹은 성공 요청의 nginx 평균입니다.\n")
     w("| 단계 | op | " + " | ".join(label for _, label, _ in COMPONENTS) + " | 합계 |")
     w("|---|---|" + "---|" * (len(COMPONENTS) + 1))
     for step in steps:
@@ -286,8 +310,10 @@ def main() -> int:
             means = {key: statistics.mean(r[key] for r in rows if key in r) for key, _, _ in COMPONENTS[1:]}
             rt_mean = statistics.mean(r["rt"] for r in rows)
             client = k6.get((step, op), {})
-            means["net_client"] = client["avg"] - rt_mean if "avg" in client else float("nan")
-            total = client.get("avg", rt_mean)
+            # k6 평균은 에러 응답까지 포함하므로, 에러가 섞인 그룹에서는 뺄셈이 의미가 없다.
+            clean = not errors.get((step, op))
+            means["net_client"] = client["avg"] - rt_mean if "avg" in client and clean else float("nan")
+            total = client["avg"] if "avg" in client and clean else rt_mean
             w(f"| {step} | {op} | " + " | ".join(fmt(means[key]) for key, _, _ in COMPONENTS) + f" | {fmt(total)} |")
 
     w("\n## 3. 구간별 p95 (ms, 더해지지 않음)\n")
