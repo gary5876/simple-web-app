@@ -1,4 +1,4 @@
-.PHONY: dev down lock smoke-backend test test-backend fe-dev test-frontend
+.PHONY: dev down lock smoke-backend test test-backend fe-dev test-frontend test-nginx
 
 dev:
 	docker compose up --build
@@ -26,3 +26,13 @@ fe-dev:
 
 test-frontend:
 	cd frontend && npm ci && npm run typecheck && npm test
+
+NGINX_TEST_VENV := tests/nginx/.venv
+
+$(NGINX_TEST_VENV)/bin/pytest: tests/nginx/requirements.txt
+	uv venv --python 3.12 $(NGINX_TEST_VENV)
+	uv pip install --python $(NGINX_TEST_VENV)/bin/python -q -r tests/nginx/requirements.txt
+	touch $@
+
+test-nginx: $(NGINX_TEST_VENV)/bin/pytest
+	$(NGINX_TEST_VENV)/bin/pytest tests/nginx/test_routing.py -v

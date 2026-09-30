@@ -90,5 +90,19 @@ services:
       redis:
         condition: service_healthy
 
+  nginx:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    image: simple-web-app/frontend:dev
+    environment:
+      # 로컬에는 앞단 LB가 없으므로 X-Forwarded-For를 믿지 않는다.
+      REAL_IP_FROM: 127.0.0.1/32
+    ports:
+      - "8080:8080"
+    depends_on:
+      - auth
+      - board-api
+
 volumes:
   pgdata: {}
