@@ -55,11 +55,19 @@ export function PendingPostsProvider({
 
   // 30초가 지나도 목록에 나타나지 않은 글은 서버에 상태를 물어본다.
   useEffect(() => {
+    // 재시도 백오프 때문에 한 번의 확인이 간격보다 길어질 수 있으므로, 이전 확인이 끝나기 전에는 새로 시작하지 않는다.
+    let running = false
     const timer = setInterval(async () => {
-      for (const post of dueForStatusCheck(latest.current, Date.now())) {
-        const status = await fetchStatus(post.id)
-        setPendings((list) => applyStatus(list, post.id, status))
-        if (status === 'published') void queryClient.invalidateQueries({ queryKey: POSTS_KEY })
+      if (running) return
+      running = true
+      try {
+        for (const post of dueForStatusCheck(latest.current, Date.now())) {
+          const status = await fetchStatus(post.id)
+          setPendings((list) => applyStatus(list, post.id, status))
+          if (status === 'published') void queryClient.invalidateQueries({ queryKey: POSTS_KEY })
+        }
+      } finally {
+        running = false
       }
     }, checkIntervalMs)
     return () => clearInterval(timer)
