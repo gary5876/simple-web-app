@@ -19,6 +19,14 @@ spec:
         prometheus.io/path: /metrics
     spec:
       terminationGracePeriodSeconds: 30
+      # 존 하나가 죽어도 남도록 Pod를 존에 고르게 퍼뜨린다. 단일 존(kind)에서도 스케줄은 막지 않는다.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: auth
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001

@@ -12,3 +12,6 @@ spec:
     healthyThreshold: 1
     unhealthyThreshold: 2
   timeoutSec: 30
+  # Pod 종료 시 NEG에서 빠진 뒤 진행 중인 요청을 최대 30초 기다린다(nginx preStop 15초와 짝).
+  connectionDraining:
+    drainingTimeoutSec: 30
