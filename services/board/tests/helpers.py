@@ -1,6 +1,9 @@
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote
+
+from uuid6 import uuid7
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MIGRATIONS_DIR = REPO_ROOT / "db" / "migrations"
@@ -26,3 +29,21 @@ def user_headers(user_id: str, nickname: str = "tester") -> dict[str, str]:
 
 def post_headers(user_id: str, nickname: str = "tester", key: str | None = None) -> dict[str, str]:
     return {**user_headers(user_id, nickname), "Idempotency-Key": key or str(uuid.uuid4())}
+
+
+def make_row(author_id: str | None, title: str = "제목", body: str = "본문", nickname: str = "tester") -> dict:
+    return {
+        "id": uuid.UUID(str(uuid7())),
+        "author_id": uuid.UUID(author_id) if author_id else None,
+        "author_nickname": nickname,
+        "title": title,
+        "body": body,
+        "created_at": datetime.now(UTC),
+    }
+
+
+async def insert_posts(engine, rows: list[dict]) -> None:
+    from board.posts_repo import insert_many
+
+    async with engine.begin() as conn:
+        await insert_many(conn, rows)
