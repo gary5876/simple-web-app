@@ -59,3 +59,10 @@ def test_board_returns_json_503_when_auth_is_down(anon: httpx.Client, auth_down:
     assert res.status_code == 503
     assert res.json()["code"] == "UNAVAILABLE"
     assert res.headers["retry-after"] == "5"
+
+
+def test_auth_me_returns_json_503_when_auth_is_down(anon: httpx.Client, auth_down: None) -> None:
+    res = anon.get("/api/auth/me")
+    assert res.status_code == 503
+    assert res.json()["code"] == "UNAVAILABLE"
+    assert res.headers["retry-after"] == "5"

@@ -1,4 +1,4 @@
-.PHONY: dev down lock smoke-backend test test-backend fe-dev test-frontend test-nginx
+.PHONY: dev down lock smoke-backend test test-backend fe-dev test-frontend test-e2e test-nginx
 
 dev:
 	docker compose up --build
@@ -19,13 +19,18 @@ test-backend:
 	cd services/auth && uv run --extra dev pytest -q
 	cd services/board && uv run --extra dev pytest -q
 
-test: test-backend
+test: test-backend test-frontend test-e2e test-nginx
 
 fe-dev:
 	cd frontend && npm run dev
 
 test-frontend:
 	cd frontend && npm ci && npm run typecheck && npm test
+
+test-e2e:
+	docker compose up -d --build
+	scripts/wait-http.sh http://localhost:8080/api/board/posts 120
+	cd frontend && npm ci && npx playwright install chromium && npx playwright test
 
 NGINX_TEST_VENV := tests/nginx/.venv
 

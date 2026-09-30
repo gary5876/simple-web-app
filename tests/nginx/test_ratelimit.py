@@ -1,9 +1,23 @@
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
-import httpx
+from collections.abc import Iterator
 
-from conftest import BASE_URL, login_client
+import httpx
+import pytest
+
+from conftest import BASE_URL, compose, login_client, stack_ready, wait_until
+
+
+@pytest.fixture(scope="module", autouse=True)
+def fresh_nginx() -> Iterator[None]:
+    # 리밋 카운터는 nginx 메모리에 있다. 앞선 테스트의 영향 없이 시작하고,
+    # 로그인 리밋을 소진시킨 뒤에는 다음 테스트가 새 예산을 받도록 앞뒤로 재시작한다.
+    compose("restart", "nginx")
+    wait_until(stack_ready)
+    yield
+    compose("restart", "nginx")
+    wait_until(stack_ready)
 
 
 def post_once(client: httpx.Client) -> httpx.Response:
