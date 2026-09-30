@@ -47,7 +47,7 @@ NS ?= simple-web-app
 K8S_VERSION ?= 1.31.0
 CRD_SCHEMA := https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
 KUBECONFORM := kubeconform -strict -summary -kubernetes-version $(K8S_VERSION) -schema-location default -schema-location '$(CRD_SCHEMA)'
-K8S_TARGETS := k8s/base k8s/overlays/local k8s/overlays/local-loadtest k8s/overlays/aws
+K8S_TARGETS := k8s/base k8s/overlays/local k8s/overlays/local-loadtest k8s/overlays/aws k8s/overlays/gcp
 
 .PHONY: k8s-validate
 # 렌더 결과를 먼저 변수에 담아 kustomize 실패가 파이프에 묻히지 않게 한다(macOS make 3.81은 .SHELLFLAGS 미지원).

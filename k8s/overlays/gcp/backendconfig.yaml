@@ -1,0 +1,14 @@
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: nginx-backendconfig
+spec:
+  healthCheck:
+    type: HTTP
+    requestPath: /nginx-health
+    port: 8080
+    checkIntervalSec: 5
+    timeoutSec: 3
+    healthyThreshold: 1
+    unhealthyThreshold: 2
+  timeoutSec: 30
