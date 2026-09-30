@@ -54,13 +54,14 @@ spec:
             limits:
               cpu: 500m
               memory: 256Mi
+          # 부하로 CPU가 부족할 때 probe 한 번 늦었다고 Pod를 죽이면 재시작 폭주가 나므로 liveness는 넉넉히(5초 x 6회) 둔다.
           livenessProbe:
             exec:
               command: ["python", "-m", "board.worker_health"]
             initialDelaySeconds: 20
-            periodSeconds: 15
+            periodSeconds: 10
             timeoutSeconds: 5
-            failureThreshold: 3
+            failureThreshold: 6
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

@@ -63,16 +63,17 @@ spec:
               path: /readyz
               port: http
             periodSeconds: 5
-            timeoutSeconds: 2
+            timeoutSeconds: 3
             failureThreshold: 3
+          # 부하로 CPU가 부족할 때 probe 한 번 늦었다고 Pod를 죽이면 재시작 폭주가 나므로 liveness는 넉넉히(5초 x 6회) 둔다.
           livenessProbe:
             httpGet:
               path: /healthz
               port: http
             initialDelaySeconds: 10
             periodSeconds: 10
-            timeoutSeconds: 2
-            failureThreshold: 3
+            timeoutSeconds: 5
+            failureThreshold: 6
           lifecycle:
             preStop:
               exec:
