@@ -1,0 +1,21 @@
+# GCP 운영(prod) 환경. main 브랜치가 이 overlay로 배포된다.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: simple-web-app
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: simple-web-app
+    includeSelectors: false
+resources:
+  - ../base
+  - managedcertificate.yaml
+images:
+  - name: simple-web-app/frontend
+    newName: asia-northeast3-docker.pkg.dev/my-gcp-project/simple-web-app/frontend
+    newTag: "0.1.0"
+  - name: simple-web-app/auth
+    newName: asia-northeast3-docker.pkg.dev/my-gcp-project/simple-web-app/auth
+    newTag: "0.1.0"
+  - name: simple-web-app/board
+    newName: asia-northeast3-docker.pkg.dev/my-gcp-project/simple-web-app/board
+    newTag: "0.1.0"

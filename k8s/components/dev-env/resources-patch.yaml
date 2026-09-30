@@ -1,0 +1,70 @@
+# base requests의 절반. limits는 그대로 둔다.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx
+spec:
+  template:
+    spec:
+      containers:
+        - name: nginx
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth
+spec:
+  template:
+    spec:
+      containers:
+        - name: auth
+          resources:
+            requests:
+              cpu: 125m
+              memory: 128Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-verify
+spec:
+  template:
+    spec:
+      containers:
+        - name: auth-verify
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: board-api
+spec:
+  template:
+    spec:
+      containers:
+        - name: board-api
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: board-worker
+spec:
+  template:
+    spec:
+      containers:
+        - name: board-worker
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi

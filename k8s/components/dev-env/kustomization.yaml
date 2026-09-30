@@ -1,0 +1,25 @@
+# 클라우드 dev 환경 공통 설정. aws/dev, gcp/dev가 함께 쓴다.
+#  - LOG_LEVEL=DEBUG
+#  - HPA 상한 축소, nginx/auth-verify/board-api 최소 1개
+#  - PDB를 maxUnavailable: 1로 바꿔 replica 1개일 때도 노드 drain이 막히지 않게 한다
+#  - 리소스 requests 절반 (limits는 그대로)
+# DB 커넥션 최악값(dev): auth 2 + auth-verify 2 + board-api 3 + worker 2 = 9 Pod x 10 + migrate 1 = 91.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+configMapGenerator:
+  - name: app-config
+    behavior: merge
+    literals:
+      - LOG_LEVEL=DEBUG
+patches:
+  - path: hpa-patch.yaml
+  - path: resources-patch.yaml
+  - target:
+      kind: PodDisruptionBudget
+      name: nginx|auth|auth-verify|board-api
+    patch: |-
+      - op: remove
+        path: /spec/minAvailable
+      - op: add
+        path: /spec/maxUnavailable
+        value: 1

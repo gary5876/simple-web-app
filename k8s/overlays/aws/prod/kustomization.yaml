@@ -1,0 +1,16 @@
+# AWS 운영(prod) 환경. main 브랜치가 이 overlay로 배포된다.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: simple-web-app
+resources:
+  - ../base
+images:
+  - name: simple-web-app/frontend
+    newName: 123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/simple-web-app/frontend
+    newTag: "0.1.0"
+  - name: simple-web-app/auth
+    newName: 123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/simple-web-app/auth
+    newTag: "0.1.0"
+  - name: simple-web-app/board
+    newName: 123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/simple-web-app/board
+    newTag: "0.1.0"

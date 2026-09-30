@@ -1,39 +1,30 @@
+# GCP(GKE) 공통 overlay. 직접 apply하지 않고 gcp/prod, gcp/dev가 가져다 쓴다.
+# 네임스페이스·도메인·ManagedCertificate·전역 고정 IP·이미지 태그처럼 환경마다 다른 값은 prod/dev에 둔다.
+# 이미지(Artifact Registry 주소)도 prod/dev에 둔다(aws/base/kustomization.yaml 주석 참고).
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-namespace: simple-web-app
 labels:
   - pairs:
       app.kubernetes.io/part-of: simple-web-app
     includeSelectors: false
 resources:
-  - ../../base
+  - ../../../base
   - ingress.yaml
   - backendconfig.yaml
   - frontendconfig.yaml
-  - managedcertificate.yaml
 patches:
   - path: nginx-service-patch.yaml
-# KEDA가 설치된 클러스터라면 아래 주석을 풀고, docs/deploy.md대로 Redis 주소를 패치한다.
+# KEDA가 설치된 클러스터라면 prod/dev kustomization에 아래 component를 추가하고, docs/deploy.md대로 Redis 주소를 패치한다.
 # KEDA가 Redis(Memorystore)에 접근할 수 있도록 방화벽/NetworkPolicy 허용도 필요하다.
 # components:
-#   - ../../components/keda-worker
+#   - ../../../components/keda-worker
 configMapGenerator:
   - name: nginx-config
     behavior: merge
     literals:
       # 공백으로 구분한 CIDR 목록. nginx가 set_real_ip_from 여러 줄로 펼친다.
-      # Google Front End 프록시 대역(130.211.0.0/22, 35.191.0.0/16)만 기본으로 넣었다.
       # GFE 프록시 대역(130.211.0.0/22, 35.191.0.0/16) + LB 전역 고정 IP.
-      # 끝의 203.0.113.10/32는 자리표시자다. replace with simple-web-app-ip address
+      # 끝의 203.0.113.10/32는 prod 자리표시자다. replace with simple-web-app-ip address
       # (gcloud compute addresses describe simple-web-app-ip --global --format='value(address)', docs/deploy.md).
+      # dev는 gcp/dev에서 자기 고정 IP(simple-web-app-dev-ip)로 덮어쓴다.
       - REAL_IP_FROM=130.211.0.0/22 35.191.0.0/16 203.0.113.10/32
-images:
-  - name: simple-web-app/frontend
-    newName: asia-northeast3-docker.pkg.dev/my-gcp-project/simple-web-app/frontend
-    newTag: "0.1.0"
-  - name: simple-web-app/auth
-    newName: asia-northeast3-docker.pkg.dev/my-gcp-project/simple-web-app/auth
-    newTag: "0.1.0"
-  - name: simple-web-app/board
-    newName: asia-northeast3-docker.pkg.dev/my-gcp-project/simple-web-app/board
-    newTag: "0.1.0"
