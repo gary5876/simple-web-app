@@ -1,0 +1,53 @@
+# 노트북(Docker Desktop 약 3.8GiB / 6 CPU)은 클라우드 최대치(auth 20, board-api 20 ...)를 감당하지 못한다.
+# Pod가 너무 많이 뜨면 시작 비용과 CPU 경쟁으로 kube-apiserver와 probe까지 굶어 전체가 무너진다.
+# 그래서 이 overlay에서만 HPA 최대치를 낮춘다. 클라우드 값은 base에 그대로 있다.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: auth
+spec:
+  maxReplicas: 4
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: auth-verify
+spec:
+  maxReplicas: 4
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: board-api
+spec:
+  maxReplicas: 6
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: nginx
+spec:
+  maxReplicas: 4
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: board-worker
+spec:
+  maxReplicaCount: 4
+---
+# auth는 요청량을 절반으로 줄이지 않고 base 값(250m/256Mi)을 그대로 쓴다.
+# argon2가 CPU를 많이 쓰므로 요청량이 작으면 HPA의 CPU %가 실제보다 크게 나와 과하게 늘어난다(폭주).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth
+spec:
+  template:
+    spec:
+      containers:
+        - name: auth
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi

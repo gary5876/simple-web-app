@@ -9,8 +9,12 @@ import { uuidv4 } from 'https://jslib.k6.io/k6-utils/1.4.0/index.js';
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:8080';
 const QUICK = __ENV.QUICK === '1';
-const USERS = parseInt(__ENV.USERS || (QUICK ? '20' : '500'), 10);
-const BASELINE = parseInt(__ENV.BASELINE || (QUICK ? '5' : '20'), 10); // 초당 요청 수
+// PROFILE=local: 노트북(Docker ~3.8GiB/6CPU)용 축소판. 클라우드 기본값의 약 1/5 규모다.
+//   USERS 500→60, BASELINE 20→4, PEAK 400→80 (모양·단계·임계치는 그대로)
+// 개별 값은 언제든 -e USERS=.. -e BASELINE=.. -e PEAK=.. 로 덮어쓴다. QUICK=1 은 시간만 줄이는 별개 옵션이다.
+const LOCAL = __ENV.PROFILE === 'local';
+const USERS = parseInt(__ENV.USERS || (QUICK ? '20' : LOCAL ? '60' : '500'), 10);
+const BASELINE = parseInt(__ENV.BASELINE || (QUICK ? '5' : LOCAL ? '4' : '20'), 10); // 초당 요청 수
 const PEAK = parseInt(__ENV.PEAK || String(BASELINE * 20), 10);
 const PASSWORD = 'loadtest-Passw0rd!';
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
