@@ -1,11 +1,14 @@
 import logging
+from urllib.parse import quote
 
 from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel, EmailStr, Field
+from redis.exceptions import RedisError
 
 from auth import users
 from auth.config import Settings
 from auth.errors import ApiError
+from auth.login_limiter import LoginLimiter
 from auth.passwords import DUMMY_HASH, hash_password, verify_password
 from auth.sessions import SessionStore
 
@@ -75,10 +78,21 @@ async def signup(body: SignupIn, request: Request) -> UserOut:
 async def login(body: LoginIn, request: Request, response: Response) -> UserOut:
     settings: Settings = request.app.state.settings
     email = body.email.lower()
+    limiter = LoginLimiter(request.app.state.redis, settings.login_fail_limit, settings.login_fail_window_seconds)
+    retry_after = await limiter.blocked_for(email)
+    if retry_after:
+        raise ApiError(
+            429,
+            "TOO_MANY_ATTEMPTS",
+            "로그인 시도가 너무 많습니다. 잠시 후 다시 시도해 주세요.",
+            {"Retry-After": str(retry_after)},
+        )
     user = await users.get_by_email(request.app.state.engine, email)
     ok = await verify_password(user["password_hash"] if user else DUMMY_HASH, body.password)
     if user is None or not ok:
+        await limiter.record_failure(email)
         raise ApiError(401, "INVALID_CREDENTIALS", "이메일 또는 비밀번호가 올바르지 않습니다.")
+    await limiter.reset(email)
     sid = await _store(request).create(user_id=user["id"], email=user["email"], nickname=user["nickname"])
     _set_cookie(response, sid, settings)
     return UserOut(id=user["id"], email=user["email"], nickname=user["nickname"])
@@ -101,3 +115,26 @@ async def logout(request: Request) -> Response:
 async def me(request: Request) -> UserOut:
     session = await _current_session(request)
     return UserOut(id=session["user_id"], email=session["email"], nickname=session["nickname"])
+
+
+@router.get("/internal/verify", include_in_schema=False)
+async def verify(request: Request) -> Response:
+    """nginx auth_request 전용. 항상 200 을 반환한다.
+
+    nginx 는 auth_request 가 5xx 를 받으면 원래 요청 전체를 500 으로 끝내므로,
+    Redis 장애 시에도 200 + X-Auth-Degraded 로 응답하고 판단은 board-api 에 맡긴다.
+    """
+    sid = request.cookies.get(COOKIE_NAME)
+    if not sid:
+        return Response(status_code=200)
+    try:
+        session = await _store(request).get(sid)
+    except RedisError:
+        log.warning("session store unavailable during verify")
+        return Response(status_code=200, headers={"X-Auth-Degraded": "1"})
+    if session is None:
+        return Response(status_code=200)
+    return Response(
+        status_code=200,
+        headers={"X-User-Id": session["user_id"], "X-User-Nickname": quote(session["nickname"], safe="")},
+    )
