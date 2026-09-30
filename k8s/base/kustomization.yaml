@@ -12,6 +12,8 @@ resources:
   - board-api.yaml
   - board-worker.yaml
   - db-migrate.yaml
+  - hpa.yaml
+  - pdb.yaml
 configMapGenerator:
   - name: app-config
     literals:
