@@ -6,6 +6,7 @@ from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError
 from starlette.concurrency import run_in_threadpool
 
+from auth import timing
 from auth.errors import unavailable
 
 T = TypeVar("T")
@@ -39,11 +40,13 @@ async def _run_limited(fn: Callable[..., T], *args) -> T:
     # argon2 는 CPU 를 많이 쓰므로 이벤트 루프를 막지 않게 스레드풀에서 실행한다.
     semaphore = _semaphore
     try:
-        await asyncio.wait_for(semaphore.acquire(), timeout=_queue_timeout_seconds)
+        with timing.track("hash_wait"):
+            await asyncio.wait_for(semaphore.acquire(), timeout=_queue_timeout_seconds)
     except TimeoutError:
         raise unavailable() from None
     try:
-        return await run_in_threadpool(fn, *args)
+        with timing.track("hash"):
+            return await run_in_threadpool(fn, *args)
     finally:
         semaphore.release()
 

@@ -1,4 +1,5 @@
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 
@@ -6,7 +7,12 @@ from board import health, routes
 from board.config import Settings
 from board.errors import install_error_handlers
 from board.infra import make_engine, make_redis
-from board.observability import RequestContextMiddleware, configure_logging, install_metrics_route
+from board.observability import (
+    RequestContextMiddleware,
+    configure_logging,
+    install_metrics_route,
+    monitor_loop_lag,
+)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -17,9 +23,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI):
         app.state.engine = make_engine(settings.database_url)
         app.state.redis = make_redis(settings.redis_url)
+        lag_task = asyncio.create_task(monitor_loop_lag())
         try:
             yield
         finally:
+            lag_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await lag_task
             await app.state.redis.aclose()
             await app.state.engine.dispose()
 

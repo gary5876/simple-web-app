@@ -3,6 +3,8 @@ import uuid
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
+from board.timing import timed
+
 ANONYMIZED_NICKNAME = "탈퇴한 사용자"
 _COLUMNS = "id, author_id, author_nickname, title, body, created_at"
 
@@ -18,6 +20,7 @@ def serialize(row) -> dict:
     }
 
 
+@timed("db")
 async def list_posts(engine: AsyncEngine, cursor: str | None, limit: int) -> dict:
     sql = f"SELECT {_COLUMNS} FROM board.posts WHERE deleted_at IS NULL"
     params: dict = {"n": limit + 1}
@@ -32,6 +35,7 @@ async def list_posts(engine: AsyncEngine, cursor: str | None, limit: int) -> dic
     return {"items": items, "next_cursor": next_cursor}
 
 
+@timed("db")
 async def get_post(engine: AsyncEngine, post_id: str) -> dict | None:
     async with engine.connect() as conn:
         row = (
@@ -54,6 +58,7 @@ async def insert_many(conn: AsyncConnection, rows: list[dict]) -> None:
     )
 
 
+@timed("db")
 async def soft_delete(engine: AsyncEngine, post_id: str, author_id: str) -> str:
     async with engine.begin() as conn:
         deleted = (
@@ -76,6 +81,7 @@ async def soft_delete(engine: AsyncEngine, post_id: str, author_id: str) -> str:
     return "forbidden" if exists else "not_found"
 
 
+@timed("db")
 async def anonymize_author(engine: AsyncEngine, user_id: str) -> list[str]:
     async with engine.begin() as conn:
         rows = (

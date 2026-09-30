@@ -4,9 +4,11 @@ from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from auth.timing import TimedRedis, instrument_engine
+
 
 def make_engine(url: str) -> AsyncEngine:
-    return create_async_engine(
+    engine = create_async_engine(
         url,
         pool_size=5,
         max_overflow=5,
@@ -15,10 +17,12 @@ def make_engine(url: str) -> AsyncEngine:
         # timeout: 연결 수립 제한, command_timeout: 쿼리 하나의 실행 제한(초과 시 TimeoutError → 503).
         connect_args={"timeout": 2, "command_timeout": 5},
     )
+    instrument_engine(engine)
+    return engine
 
 
 def make_redis(url: str) -> Redis:
-    return Redis.from_url(
+    return TimedRedis.from_url(
         url,
         decode_responses=True,
         socket_connect_timeout=1,

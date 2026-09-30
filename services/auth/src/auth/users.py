@@ -5,6 +5,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from auth.errors import ApiError
+from auth.timing import timed
 
 
 def _user(row) -> dict:
@@ -17,6 +18,7 @@ def _user(row) -> dict:
     }
 
 
+@timed("db")
 async def create_user(engine: AsyncEngine, *, email: str, nickname: str, password_hash: str) -> dict:
     user_id = uuid.uuid4()
     try:
@@ -38,6 +40,7 @@ async def create_user(engine: AsyncEngine, *, email: str, nickname: str, passwor
     return {"id": str(user_id), "email": email, "nickname": nickname}
 
 
+@timed("db")
 async def get_by_email(engine: AsyncEngine, email: str) -> dict | None:
     async with engine.connect() as conn:
         row = (
@@ -52,6 +55,7 @@ async def get_by_email(engine: AsyncEngine, email: str) -> dict | None:
     return _user(row) if row else None
 
 
+@timed("db")
 async def get_by_id(engine: AsyncEngine, user_id: str) -> dict | None:
     async with engine.connect() as conn:
         row = (
@@ -63,6 +67,7 @@ async def get_by_id(engine: AsyncEngine, user_id: str) -> dict | None:
     return _user(row) if row else None
 
 
+@timed("db")
 async def soft_delete(engine: AsyncEngine, user_id: str) -> bool:
     """탈퇴 처리. 이메일/닉네임을 익명화해 같은 이메일로 재가입할 수 있게 한다. 이미 탈퇴했으면 False."""
     async with engine.begin() as conn:
