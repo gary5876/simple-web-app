@@ -9,6 +9,7 @@ resources:
   - ../../base
   - ingress.yaml
   - backendconfig.yaml
+  - frontendconfig.yaml
   - managedcertificate.yaml
 patches:
   - path: nginx-service-patch.yaml
@@ -22,9 +23,10 @@ configMapGenerator:
     literals:
       # 공백으로 구분한 CIDR 목록. nginx가 set_real_ip_from 여러 줄로 펼친다.
       # Google Front End 프록시 대역(130.211.0.0/22, 35.191.0.0/16)만 기본으로 넣었다.
-      # GFE는 LB 자신의 IP로도 접속하므로, 배포 시 전역 고정 IP simple-web-app-ip를
-      # 목록 끝에 /32로 추가해야 한다(docs/deploy.md).
-      - REAL_IP_FROM=130.211.0.0/22 35.191.0.0/16
+      # GFE 프록시 대역(130.211.0.0/22, 35.191.0.0/16) + LB 전역 고정 IP.
+      # 끝의 203.0.113.10/32는 자리표시자다. replace with simple-web-app-ip address
+      # (gcloud compute addresses describe simple-web-app-ip --global --format='value(address)', docs/deploy.md).
+      - REAL_IP_FROM=130.211.0.0/22 35.191.0.0/16 203.0.113.10/32
 images:
   - name: simple-web-app/frontend
     newName: asia-northeast3-docker.pkg.dev/my-gcp-project/simple-web-app/frontend
