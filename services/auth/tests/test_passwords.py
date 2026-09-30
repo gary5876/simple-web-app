@@ -56,3 +56,14 @@ async def test_verify_password_bounds_concurrent_verification(monkeypatch):
 
     assert results == [True] * 6
     assert state["max"] == 2
+
+
+async def test_new_hashes_use_single_lane_and_legacy_hashes_still_verify():
+    from argon2 import PasswordHasher
+
+    new_hash = await passwords.hash_password("pw-12345678")
+    assert "p=1" in new_hash
+    legacy = PasswordHasher().hash("pw-12345678")  # 기본값 p=4
+    assert "p=4" in legacy
+    assert await passwords.verify_password(legacy, "pw-12345678") is True
+    assert await passwords.verify_password(legacy, "wrong") is False

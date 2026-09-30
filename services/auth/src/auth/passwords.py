@@ -4,7 +4,9 @@ from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError
 from starlette.concurrency import run_in_threadpool
 
-_hasher = PasswordHasher()
+# parallelism=1: 해시 하나가 스레드 1개만 쓰게 해서 파드 CPU limit 안에서 스레드 경합을 줄인다.
+# argon2 해시 문자열에 파라미터가 들어 있어서 기존(p=4) 해시도 그대로 검증된다.
+_hasher = PasswordHasher(parallelism=1)
 
 # argon2 는 해시 하나당 메모리를 많이(기본 약 64MiB) 쓴다. 스레드풀이 허용하는 만큼
 # 동시에 돌리면 파드가 OOMKill 될 수 있어서, 프로세스 전체에서 동시 실행 수를 제한한다.
