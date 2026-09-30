@@ -135,3 +135,24 @@ loadtest-quick: ## 단축 시나리오 (약 1분 30초, 동작 확인용)
 
 loadtest-local: ## 노트북용 축소판 (약 14분, USERS=60 PEAK=80). 클라우드 임계치는 그대로
 	k6 run -e BASE_URL=$(BASE_URL) -e PROFILE=local $(if $(USERS),-e USERS=$(USERS)) $(if $(PEAK),-e PEAK=$(PEAK)) $(K6_ARGS) loadtest/disaster.js
+
+# ---------- 응답시간 층별 분석 (loadtest/README.md "응답시간 분해") ----------
+RESULTS := loadtest/results
+SINCE ?= 1h
+
+.PHONY: loadtest-steps loadtest-collect loadtest-analyze
+loadtest-steps: ## 계단식 부하 (RATES=5,20,50,100 STEP=60 GAP=10 MIX=80,15,5 USERS=60)
+	@mkdir -p $(RESULTS)
+	k6 run -e BASE_URL=$(BASE_URL) -e SUMMARY=$(RESULTS)/steps-summary.json \
+		$(foreach v,RATES STEP GAP MIX USERS,$(if $($(v)),-e $(v)=$($(v)))) $(K6_ARGS) loadtest/steps.js
+
+loadtest-collect: ## 자원 사용 기록 (Ctrl+C로 종료). loadtest-steps와 동시에 다른 터미널에서 실행
+	@mkdir -p $(RESULTS)
+	python3 loadtest/collect.py -n $(NS) > $(RESULTS)/resources.jsonl
+
+loadtest-analyze: ## nginx 로그를 받아 층별 표 생성 (SINCE=1h). 결과: loadtest/results/report.md
+	@mkdir -p $(RESULTS)
+	kubectl -n $(NS) logs -l app.kubernetes.io/name=nginx --tail=-1 --since=$(SINCE) --max-log-requests=20 > $(RESULTS)/nginx.log
+	python3 loadtest/analyze.py --nginx $(RESULTS)/nginx.log --k6 $(RESULTS)/steps-summary.json \
+		$(if $(wildcard $(RESULTS)/resources.jsonl),--resources $(RESULTS)/resources.jsonl) > $(RESULTS)/report.md
+	@echo "보고서: $(RESULTS)/report.md"

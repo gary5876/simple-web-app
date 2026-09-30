@@ -29,16 +29,18 @@ limit_req_zone $board_write_key    zone=board_write:10m rate=${RATE_WRITE};
 limit_req_zone $binary_remote_addr zone=auth_login:10m  rate=${RATE_LOGIN};
 limit_req_zone $auth_sensitive_key zone=auth_sensitive:10m rate=${RATE_LOGIN};
 limit_req_status 429;
+limit_req_log_level warn;
 
 # 부하 테스트 분석용 access log (loadtest/analyze.py가 읽는다). 시간 단위는 초.
 #   rt: nginx가 요청을 받은 뒤 응답을 다 보낼 때까지, urt: 본 요청 upstream(board-api/auth) 응답 시간,
-#   vt: auth_request(/_verify) 응답 시간, st_app/st_verify: 앱이 보낸 Server-Timing(구간별 ms).
+#   vt: auth_request(/_verify) 응답 시간, st_app/st_verify: 앱이 보낸 Server-Timing(구간별 ms),
+#   step/op: k6(loadtest/lib.js)가 붙인 X-Load-Step/X-Load-Op 헤더. 일반 트래픽에서는 빈 값이다.
 # Server-Timing은 로그에만 남기고 클라이언트에는 숨긴다(snippets/proxy_common.conf).
 log_format perf escape=json
     '{"ts":$msec,"rid":"$request_id","m":"$request_method","uri":"$request_uri","status":$status,'
     '"rt":$request_time,"urt":"$upstream_response_time","uct":"$upstream_connect_time",'
-    '"vt":"$verify_time","st_app":"$upstream_http_server_timing","st_verify":"$verify_server_timing"}';
-limit_req_log_level warn;
+    '"vt":"$verify_time","st_app":"$upstream_http_server_timing","st_verify":"$verify_server_timing",'
+    '"step":"$http_x_load_step","op":"$http_x_load_op"}';
 
 upstream auth_upstream {
     server ${AUTH_UPSTREAM};
