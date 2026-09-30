@@ -51,3 +51,10 @@ def install_error_handlers(app: FastAPI) -> None:
 
     for exc_type in (RedisError, DBAPIError, PoolTimeoutError, OSError):
         app.add_exception_handler(exc_type, _dependency_down)
+
+    async def _unhandled(request: Request, exc: Exception):
+        # 예상하지 못한 버그. 스택은 로그에만 남기고 클라이언트에는 공통 형식의 500 을 준다.
+        log.exception("unhandled error", exc_info=exc)
+        return error_response(500, "INTERNAL", "서버 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.")
+
+    app.add_exception_handler(Exception, _unhandled)

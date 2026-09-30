@@ -1,8 +1,11 @@
 import asyncio
 
+from asgi_lifespan import LifespanManager
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
 from board import cache
+from board.app import create_app
 from helpers import (
     BROKEN_DATABASE_URL,
     BROKEN_REDIS_URL,
@@ -182,3 +185,47 @@ async def test_pool_timeout_maps_to_503(client, monkeypatch):
     assert r.status_code == 503
     assert r.json()["code"] == "UNAVAILABLE"
     assert r.headers["retry-after"]
+
+
+async def test_statement_timeout_maps_to_503(client, monkeypatch):
+    async def slow(engine, post_id):
+        raise asyncio.TimeoutError()  # asyncpg command_timeout 초과
+
+    monkeypatch.setattr("board.posts_repo.get_post", slow)
+    r = await client.get("/api/board/posts/0192f5a0-0000-7000-8000-000000000001")
+    assert r.status_code == 503
+    assert r.json()["code"] == "UNAVAILABLE"
+
+
+async def test_unhandled_error_is_500_json(make_client, settings, monkeypatch):
+    async def boom(engine, cursor, limit):
+        raise RuntimeError("bug")
+
+    monkeypatch.setattr("board.posts_repo.list_posts", boom)
+    app = create_app(settings)
+    async with LifespanManager(app):
+        transport = ASGITransport(app=app, raise_app_exceptions=False)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as c:
+            r = await c.get("/api/board/posts", params={"limit": 5})
+    assert r.status_code == 500
+    assert r.json()["code"] == "INTERNAL"
+    assert r.json()["message"]
+
+
+async def test_invalidate_drops_stale_first_page(rdb):
+    await rdb.set("cache:posts:first", "{}")
+    await rdb.set("stale:posts:first", "{}")
+    await rdb.set("cache:post:abc", "{}")
+    await cache.invalidate(rdb, "abc")
+    assert await rdb.exists("cache:posts:first", "stale:posts:first", "cache:post:abc") == 0
+
+
+async def test_detail_reports_pending_when_db_down(make_client, settings, rdb):
+    pid = "0192f5a0-0000-7000-8000-000000000011"
+    await rdb.set(f"pending:{pid}", "1")
+    async with make_client(settings.model_copy(update={"database_url": BROKEN_DATABASE_URL})) as c:
+        pending = await c.get(f"/api/board/posts/{pid}")
+        unknown = await c.get("/api/board/posts/0192f5a0-0000-7000-8000-000000000012")
+    assert pending.status_code == 200
+    assert pending.json() == {"status": "pending"}
+    assert unknown.status_code == 503

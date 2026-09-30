@@ -1,4 +1,13 @@
-from helpers import BROKEN_DATABASE_URL, BROKEN_REDIS_URL
+import time
+
+import pytest
+from asgi_lifespan import LifespanManager
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
+
+from auth.app import create_app
+from auth.infra import make_engine
+from helpers import BROKEN_DATABASE_URL, BROKEN_REDIS_URL, PASSWORD
 
 
 async def test_healthz(client):
@@ -48,3 +57,30 @@ async def test_metrics_exposes_http_counters(client):
     r = await client.get("/metrics")
     assert r.status_code == 200
     assert 'http_requests_total{method="GET",route="/healthz",status="200"}' in r.text
+
+
+async def test_unhandled_error_is_500_json(settings, monkeypatch):
+    async def boom(*args, **kwargs):
+        raise RuntimeError("bug")
+
+    monkeypatch.setattr("auth.users.create_user", boom)
+    app = create_app(settings)
+    async with LifespanManager(app):
+        transport = ASGITransport(app=app, raise_app_exceptions=False)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as c:
+            r = await c.post("/api/auth/signup", json={"email": "a@example.com", "nickname": "alice", "password": PASSWORD})
+    assert r.status_code == 500
+    assert r.json()["code"] == "INTERNAL"
+    assert r.json()["message"]
+
+
+async def test_engine_enforces_statement_timeout(settings):
+    engine = make_engine(settings.database_url)
+    started = time.monotonic()
+    try:
+        with pytest.raises(TimeoutError):  # OSError 하위라 503 핸들러가 잡는다
+            async with engine.connect() as conn:
+                await conn.execute(text("SELECT pg_sleep(10)"))
+    finally:
+        await engine.dispose()
+    assert time.monotonic() - started < 8

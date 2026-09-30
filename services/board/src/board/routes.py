@@ -50,7 +50,14 @@ async def get_post(post_id: uuid.UUID, request: Request) -> dict:
     cached = await cache.get_post(redis, pid)
     if cached is not None:
         return {"status": "published", "post": cached}
-    post = await posts_repo.get_post(request.app.state.engine, pid)
+    try:
+        post = await posts_repo.get_post(request.app.state.engine, pid)
+    except cache.DB_ERRORS:
+        # DB 장애 중이라도 아직 큐에 있거나 실패한 글이면 그 상태를 알려 준다.
+        status = await cache.post_status(redis, pid)
+        if status is not None:
+            return {"status": status}
+        raise
     if post is not None:
         await cache.set_post(redis, pid, post, request.app.state.settings.detail_cache_ttl_seconds)
         return {"status": "published", "post": post}

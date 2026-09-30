@@ -97,4 +97,4 @@ async def post_status(redis: Redis, post_id: str) -> str | None:
 
 async def invalidate(redis: Redis, *post_ids: str) -> None:
     with suppress(RedisError):
-        await redis.delete(keys.FIRST_PAGE, *(keys.post_cache(p) for p in post_ids))
+        await redis.delete(keys.FIRST_PAGE, keys.FIRST_PAGE_STALE, *(keys.post_cache(p) for p in post_ids))

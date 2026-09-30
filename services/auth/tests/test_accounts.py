@@ -27,6 +27,17 @@ async def test_duplicate_nickname_is_409(client):
     assert r.json()["code"] == "NICKNAME_TAKEN"
 
 
+async def test_nickname_is_trimmed(client):
+    user = await signup(client, nickname="  alice  ")
+    assert user["nickname"] == "alice"
+
+
+async def test_whitespace_only_nickname_is_422(client):
+    r = await client.post("/api/auth/signup", json={"email": "a@example.com", "nickname": "     ", "password": PASSWORD})
+    assert r.status_code == 422
+    assert r.json()["code"] == "VALIDATION_ERROR"
+
+
 async def test_short_password_is_422(client):
     r = await client.post("/api/auth/signup", json={"email": "a@example.com", "nickname": "al", "password": "short"})
     assert r.status_code == 422

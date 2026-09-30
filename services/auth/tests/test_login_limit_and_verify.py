@@ -69,3 +69,12 @@ async def test_verify_reports_degraded_when_redis_down(make_client, settings):
     assert r.status_code == 200
     assert r.headers["X-Auth-Degraded"] == "1"
     assert "X-User-Id" not in r.headers
+
+
+async def test_verify_reports_degraded_on_corrupt_session(client, rdb):
+    await rdb.set("session:corrupt", "{not json")
+    client.cookies.set("sid", "corrupt")
+    r = await client.get("/internal/verify")
+    assert r.status_code == 200
+    assert r.headers["X-Auth-Degraded"] == "1"
+    assert "X-User-Id" not in r.headers

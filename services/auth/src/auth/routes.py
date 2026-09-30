@@ -1,9 +1,9 @@
 import logging
+from typing import Annotated
 from urllib.parse import quote
 
 from fastapi import APIRouter, Request, Response
-from pydantic import BaseModel, EmailStr, Field
-from redis.exceptions import RedisError
+from pydantic import BaseModel, EmailStr, Field, StringConstraints
 
 from auth import users
 from auth.config import Settings
@@ -21,7 +21,8 @@ COOKIE_NAME = "sid"
 class SignupIn(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
-    nickname: str = Field(min_length=2, max_length=20)
+    # 앞뒤 공백은 잘라낸 뒤 길이를 검사한다 (공백뿐인 닉네임은 422).
+    nickname: Annotated[str, StringConstraints(strip_whitespace=True, min_length=2, max_length=20)]
 
 
 class LoginIn(BaseModel):
@@ -150,12 +151,11 @@ async def verify(request: Request) -> Response:
         return Response(status_code=200)
     try:
         session = await _store(request).get(sid)
-    except RedisError:
-        log.warning("session store unavailable during verify")
+        if session is None:
+            return Response(status_code=200)
+        headers = {"X-User-Id": session["user_id"], "X-User-Nickname": quote(session["nickname"], safe="")}
+    except Exception:
+        # Redis 장애뿐 아니라 깨진 세션 값도 5xx 로 올리면 nginx 가 요청 전체를 500 으로 끝낸다.
+        log.warning("session lookup failed during verify", exc_info=True)
         return Response(status_code=200, headers={"X-Auth-Degraded": "1"})
-    if session is None:
-        return Response(status_code=200)
-    return Response(
-        status_code=200,
-        headers={"X-User-Id": session["user_id"], "X-User-Nickname": quote(session["nickname"], safe="")},
-    )
+    return Response(status_code=200, headers=headers)
