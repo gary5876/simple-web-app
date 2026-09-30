@@ -1,0 +1,24 @@
+# AWS(EKS) 공통 overlay. 직접 apply하지 않고 aws/prod, aws/dev가 가져다 쓴다.
+# 네임스페이스·도메인·인증서·이미지 태그처럼 환경마다 다른 값은 prod/dev에 둔다.
+# 이미지(ECR 주소)도 prod/dev에 둔다. images 변환은 이름으로 매칭하므로 여기서 이름을 ECR 주소로 바꾸면
+# 배포 파이프라인의 `kustomize edit set image simple-web-app/auth=...`가 prod/dev에서 매칭되지 않는다.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: simple-web-app
+    includeSelectors: false
+resources:
+  - ../../../base
+  - ingress.yaml
+# KEDA가 설치된 클러스터라면 prod/dev kustomization에 아래 component를 추가하고, docs/deploy.md대로 Redis 주소를 패치한다.
+# KEDA(v2.19.0)가 Redis(ElastiCache)에 접근할 수 있도록 보안 그룹/NetworkPolicy 허용도 필요하다.
+# components:
+#   - ../../../components/keda-worker
+configMapGenerator:
+  - name: nginx-config
+    behavior: merge
+    literals:
+      # ALB 노드는 VPC 서브넷 안의 IP로 접속한다. Terraform VPC CIDR와 같아야 한다.
+      # dev가 다른 VPC(CIDR)를 쓰면 aws/dev에서 같은 방식(behavior: merge)으로 덮어쓴다.
+      - REAL_IP_FROM=10.0.0.0/16
