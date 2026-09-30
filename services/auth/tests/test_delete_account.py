@@ -63,3 +63,32 @@ async def test_retry_after_partial_failure_completes(client, settings, rdb):
     r = await _delete(client)
     assert r.status_code == 204
     assert len(await rdb.xrange("user:events")) == 1
+
+
+async def test_publish_failure_keeps_session_and_retry_publishes_once(client, rdb, monkeypatch):
+    from redis.exceptions import RedisError
+
+    from auth import routes
+
+    real = routes.publish_user_deleted
+    calls = {"n": 0}
+
+    async def flaky(redis, user_id):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RedisError("boom")
+        await real(redis, user_id)
+
+    monkeypatch.setattr(routes, "publish_user_deleted", flaky)
+    await signup(client)
+    await login(client)
+
+    first = await _delete(client)
+    assert first.status_code == 503
+    assert (await client.get("/api/auth/me")).status_code == 200
+
+    retry = await _delete(client)
+    assert retry.status_code == 204
+    events = await rdb.xrange("user:events")
+    assert len(events) == 1
+    assert events[0][1]["type"] == "user_deleted"

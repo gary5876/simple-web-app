@@ -131,8 +131,8 @@ async def delete_account(body: DeleteAccountIn, request: Request) -> Response:
     if user is None or not await verify_password(user["password_hash"], body.password):
         raise ApiError(403, "FORBIDDEN", "비밀번호가 올바르지 않습니다.")
     await users.soft_delete(engine, user["id"])
-    await _store(request).delete_all(user["id"])
     await publish_user_deleted(request.app.state.redis, user["id"])
+    await _store(request).delete_all(user["id"])
     response = Response(status_code=204)
     _clear_cookie(response, request.app.state.settings)
     return response
