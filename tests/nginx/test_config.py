@@ -3,6 +3,14 @@ import subprocess
 from conftest import ROOT
 
 MARKER = "--- real-ip.inc ---"
+IMAGE = "simple-web-app/frontend:dev"
+# nginx -t가 upstream 호스트를 resolve하므로 --add-host로 해석 가능하게 한다.
+DOCKER_RUN = [
+    "docker", "run", "--rm",
+    "--add-host", "auth:127.0.0.1",
+    "--add-host", "board-api:127.0.0.1",
+    "--add-host", "auth-verify:127.0.0.1",
+]
 
 
 def test_real_ip_from_accepts_a_space_separated_cidr_list() -> None:
@@ -10,9 +18,9 @@ def test_real_ip_from_accepts_a_space_separated_cidr_list() -> None:
     script = f"/docker-entrypoint.sh nginx -t && echo '{MARKER}' && cat /etc/nginx/conf.d/real-ip.inc"
     res = subprocess.run(
         [
-            "docker", "compose", "run", "--rm", "--no-deps",
+            *DOCKER_RUN,
             "-e", "REAL_IP_FROM=130.211.0.0/22 35.191.0.0/16",
-            "--entrypoint", "sh", "nginx", "-c", script,
+            "--entrypoint", "sh", IMAGE, "-c", script,
         ],
         cwd=ROOT,
         capture_output=True,
@@ -34,9 +42,9 @@ def test_verify_requests_use_a_dedicated_upstream() -> None:
     script = "/docker-entrypoint.sh nginx -t >&2 && cat /etc/nginx/conf.d/default.conf"
     res = subprocess.run(
         [
-            "docker", "compose", "run", "--rm", "--no-deps",
+            *DOCKER_RUN,
             "-e", "VERIFY_UPSTREAM=auth-verify:8000",
-            "--entrypoint", "sh", "nginx", "-c", script,
+            "--entrypoint", "sh", IMAGE, "-c", script,
         ],
         cwd=ROOT,
         capture_output=True,
