@@ -5,6 +5,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from redis.exceptions import RedisError
 from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 log = logging.getLogger(__name__)
@@ -49,5 +50,5 @@ def install_error_handlers(app: FastAPI) -> None:
         return error_response(err.status, err.code, err.message, err.headers)
 
     # Redis 장애, DB 장애(드라이버 에러 / 연결 거부 같은 OSError)는 모두 503 으로 바꾼다.
-    for exc_type in (RedisError, DBAPIError, OSError):
+    for exc_type in (RedisError, DBAPIError, PoolTimeoutError, OSError):
         app.add_exception_handler(exc_type, _dependency_down)

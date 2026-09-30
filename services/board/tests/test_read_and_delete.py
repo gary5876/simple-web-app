@@ -1,5 +1,7 @@
 import asyncio
 
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
+
 from board import cache
 from helpers import (
     BROKEN_DATABASE_URL,
@@ -157,3 +159,26 @@ async def test_delete_missing_is_404_and_anonymous_is_401(client):
     missing = "0192f5a0-0000-7000-8000-000000000009"
     assert (await client.delete(f"/api/board/posts/{missing}", headers=user_headers(new_user_id()))).status_code == 404
     assert (await client.delete(f"/api/board/posts/{missing}")).status_code == 401
+
+
+async def test_first_page_serves_stale_on_pool_timeout(rdb, settings):
+    async def ok():
+        return {"items": [{"id": "x"}], "next_cursor": None}
+
+    async def exhausted():
+        raise PoolTimeoutError("QueuePool limit reached")
+
+    await cache.first_page(rdb, ok, settings)
+    await rdb.delete("cache:posts:first")
+    assert await cache.first_page(rdb, exhausted, settings) == {"items": [{"id": "x"}], "next_cursor": None}
+
+
+async def test_pool_timeout_maps_to_503(client, monkeypatch):
+    async def exhausted(engine, post_id):
+        raise PoolTimeoutError("QueuePool limit reached")
+
+    monkeypatch.setattr("board.posts_repo.get_post", exhausted)
+    r = await client.get("/api/board/posts/0192f5a0-0000-7000-8000-000000000001")
+    assert r.status_code == 503
+    assert r.json()["code"] == "UNAVAILABLE"
+    assert r.headers["retry-after"]

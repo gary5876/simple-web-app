@@ -7,6 +7,7 @@ from contextlib import suppress
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
 from board import keys
 from board.config import Settings
@@ -14,7 +15,7 @@ from board.metrics import record_cache
 
 log = logging.getLogger(__name__)
 
-DB_ERRORS = (DBAPIError, OSError)
+DB_ERRORS = (DBAPIError, PoolTimeoutError, OSError)
 LOCK_TTL_SECONDS = 2
 LOCK_WAIT_SECONDS = 0.05
 LOCK_WAIT_ATTEMPTS = 5
