@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from board import health
+from board import health, routes
 from board.config import Settings
 from board.errors import install_error_handlers
 from board.infra import make_engine, make_redis
@@ -29,4 +29,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     install_error_handlers(app)
     install_metrics_route(app)
     app.include_router(health.router)
+    app.include_router(routes.router)
     return app
