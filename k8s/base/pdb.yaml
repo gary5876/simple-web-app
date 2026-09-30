@@ -45,3 +45,15 @@ spec:
   selector:
     matchLabels:
       app.kubernetes.io/name: board-worker
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: auth-verify
+  labels:
+    app.kubernetes.io/name: auth-verify
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: auth-verify

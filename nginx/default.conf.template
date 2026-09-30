@@ -36,6 +36,13 @@ upstream auth_upstream {
     keepalive 32;
 }
 
+# 세션 확인(/_verify) 전용 upstream. 로그인/가입(argon2)으로 auth가 포화돼도 게시판 읽기가 막히지 않게 분리한다.
+# 기본값은 AUTH_UPSTREAM과 같은 곳(auth:8000)이고, k8s에서는 auth-verify 배포를 가리킨다.
+upstream verify_backend {
+    server ${VERIFY_UPSTREAM};
+    keepalive 32;
+}
+
 upstream board_upstream {
     server ${BOARD_UPSTREAM};
     keepalive 32;
@@ -84,7 +91,7 @@ server {
         proxy_set_header X-User-Id "";
         proxy_set_header X-User-Nickname "";
         proxy_set_header X-Auth-Degraded "";
-        proxy_pass http://auth_upstream/internal/verify;
+        proxy_pass http://verify_backend/internal/verify;
     }
 
     location ~ ^/api/auth/(login|signup)$ {

@@ -8,6 +8,7 @@ RUN npm run build
 
 FROM nginxinc/nginx-unprivileged:1.27-alpine
 ENV AUTH_UPSTREAM=auth:8000 \
+    VERIFY_UPSTREAM=auth:8000 \
     BOARD_UPSTREAM=board-api:8000 \
     REAL_IP_FROM=10.0.0.0/8 \
     RATE_READ=100r/s \

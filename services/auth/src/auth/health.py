@@ -19,5 +19,6 @@ async def readyz(request: Request) -> JSONResponse:
     redis_ok, db_ok = await asyncio.gather(
         check_redis(request.app.state.redis), check_db(request.app.state.engine)
     )
-    status = 200 if (redis_ok and db_ok) else 503
+    ready = redis_ok and (db_ok or not request.app.state.settings.ready_requires_db)
+    status = 200 if ready else 503
     return JSONResponse({"redis": redis_ok, "db": db_ok}, status_code=status)

@@ -9,6 +9,7 @@ resources:
   - namespace.yaml
   - nginx.yaml
   - auth.yaml
+  - auth-verify.yaml
   - board-api.yaml
   - board-worker.yaml
   - db-migrate.yaml
@@ -25,6 +26,7 @@ configMapGenerator:
   - name: nginx-config
     literals:
       - AUTH_UPSTREAM=auth:8000
+      - VERIFY_UPSTREAM=auth-verify:8000
       - BOARD_UPSTREAM=board-api:8000
       - REAL_IP_FROM=127.0.0.1/32
       # nginx limit_req 존은 Pod(replica)마다 따로 존재한다. HPA가 nginx를 2~10개로 늘리면

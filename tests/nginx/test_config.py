@@ -26,3 +26,22 @@ def test_real_ip_from_accepts_a_space_separated_cidr_list() -> None:
         "set_real_ip_from 130.211.0.0/22;",
         "set_real_ip_from 35.191.0.0/16;",
     ]
+
+
+def test_verify_requests_use_a_dedicated_upstream() -> None:
+    # /_verify는 VERIFY_UPSTREAM(k8s에서는 auth-verify)으로만 나가고, 기본값은 auth다.
+    script = "/docker-entrypoint.sh nginx -t >/dev/null 2>&1; cat /etc/nginx/conf.d/default.conf"
+    res = subprocess.run(
+        [
+            "docker", "compose", "run", "--rm", "--no-deps",
+            "-e", "VERIFY_UPSTREAM=auth-verify:8000",
+            "--entrypoint", "sh", "nginx", "-c", script,
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode == 0, res.stdout + res.stderr
+    conf = res.stdout
+    assert "upstream verify_backend {\n    server auth-verify:8000;" in conf
+    assert "proxy_pass http://verify_backend/internal/verify;" in conf

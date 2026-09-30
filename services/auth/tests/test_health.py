@@ -84,3 +84,12 @@ async def test_engine_enforces_statement_timeout(settings):
     finally:
         await engine.dispose()
     assert time.monotonic() - started < 8
+
+
+async def test_readyz_200_when_db_down_but_not_required(make_client, settings):
+    # auth-verify 배포는 DB 없이 Redis만으로 검증하므로 DB 장애가 readiness를 깨지 않아야 한다.
+    degraded = settings.model_copy(update={"database_url": BROKEN_DATABASE_URL, "ready_requires_db": False})
+    async with make_client(degraded) as c:
+        r = await c.get("/readyz")
+    assert r.status_code == 200
+    assert r.json() == {"redis": True, "db": False}

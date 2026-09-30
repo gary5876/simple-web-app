@@ -61,7 +61,7 @@ k8s-validate: ## 모든 kustomize 대상 렌더링 + 스키마 검증
 KIND_CLUSTER ?= simple-web-app
 LOCAL_OVERLAY ?= local
 METRICS_SERVER_URL := https://github.com/kubernetes-sigs/metrics-server/releases/download/v0.7.2/components.yaml
-APP_DEPLOYMENTS := nginx auth board-api board-worker
+APP_DEPLOYMENTS := nginx auth auth-verify board-api board-worker
 LOCAL_IMAGES := simple-web-app/auth:dev simple-web-app/board:dev simple-web-app/frontend:dev
 
 .PHONY: k8s-local k8s-smoke k8s-down

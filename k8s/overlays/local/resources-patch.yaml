@@ -54,3 +54,17 @@ spec:
             requests:
               cpu: 50m
               memory: 64Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-verify
+spec:
+  template:
+    spec:
+      containers:
+        - name: auth-verify
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
