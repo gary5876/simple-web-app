@@ -12,7 +12,7 @@ from auth.observability import RequestContextMiddleware, configure_logging, inst
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
     configure_logging(settings.log_level)
-    passwords.configure(settings.hash_concurrency)
+    passwords.configure(settings.hash_concurrency, settings.hash_queue_timeout_seconds)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
