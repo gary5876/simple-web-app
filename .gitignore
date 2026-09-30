@@ -1,0 +1,11 @@
+.superpowers/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+node_modules/
+dist/
+.env
+.DS_Store
+uv.lock
