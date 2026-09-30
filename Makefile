@@ -112,3 +112,13 @@ k8s-local-loadtest: ## kind에 부하 테스트용 overlay 배포 (KEDA 포함, 
 	@# KEDA가 만드는 HPA와 충돌하지 않도록 base의 CPU HPA를 먼저 지운다.
 	-kubectl -n $(NS) delete hpa board-worker --ignore-not-found
 	$(MAKE) k8s-local LOCAL_OVERLAY=local-loadtest
+
+BASE_URL ?= http://localhost:8080
+K6_ARGS ?=
+
+.PHONY: loadtest loadtest-quick
+loadtest: ## k6 재난 시나리오 (약 14분). 먼저 make k8s-local-loadtest
+	k6 run -e BASE_URL=$(BASE_URL) $(K6_ARGS) loadtest/disaster.js
+
+loadtest-quick: ## 단축 시나리오 (약 1분 30초, 동작 확인용)
+	k6 run -e BASE_URL=$(BASE_URL) -e QUICK=1 $(K6_ARGS) loadtest/disaster.js
