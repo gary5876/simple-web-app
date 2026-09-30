@@ -11,8 +11,9 @@ from testcontainers.redis import RedisContainer
 
 from board.app import create_app
 from board.config import Settings
-from board.infra import make_engine
+from board.infra import make_engine, make_redis
 from board.migrate import migrate
+from board.worker import Worker
 from helpers import MIGRATIONS_DIR, to_dsn
 
 
@@ -79,3 +80,28 @@ async def engine(settings):
     e = make_engine(settings.database_url)
     yield e
     await e.dispose()
+
+
+@pytest.fixture
+def make_worker():
+    @asynccontextmanager
+    async def _make(settings: Settings, name: str = "test-worker"):
+        engine = make_engine(settings.database_url)
+        redis = make_redis(settings.redis_url)
+        worker = Worker(engine, redis, settings, name)
+        try:
+            await worker.ensure_groups()
+            yield worker
+        finally:
+            await redis.aclose()
+            await worker.engine.dispose()
+            if worker.engine is not engine:
+                await engine.dispose()
+
+    return _make
+
+
+@pytest.fixture
+async def worker(make_worker, settings):
+    async with make_worker(settings) as w:
+        yield w

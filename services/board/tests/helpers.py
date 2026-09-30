@@ -3,7 +3,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote
 
+from sqlalchemy import text
 from uuid6 import uuid7
+
+from board.identity import CurrentUser
+from board.queue import enqueue_post
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MIGRATIONS_DIR = REPO_ROOT / "db" / "migrations"
@@ -47,3 +51,17 @@ async def insert_posts(engine, rows: list[dict]) -> None:
 
     async with engine.begin() as conn:
         await insert_many(conn, rows)
+
+
+async def enqueue(redis, settings, user_id: str, title: str = "제목", body: str = "본문") -> str:
+    return await enqueue_post(redis, settings, CurrentUser(user_id, "tester"), title, body, str(uuid.uuid4()))
+
+
+async def fetch_posts(engine) -> list[dict]:
+    async with engine.connect() as conn:
+        rows = (
+            await conn.execute(
+                text("SELECT id, author_id, author_nickname, title, body, deleted_at FROM board.posts ORDER BY id")
+            )
+        ).mappings().all()
+    return [dict(r) for r in rows]
