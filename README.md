@@ -11,26 +11,62 @@
 - **one-click-deploy-k8s와의 관계:** 클러스터·매니지드 DB/Redis·LB·DNS·인증서 같은 인프라 프로비저닝과 클라우드 배포는 별도 인프라 프로젝트 `one-click-deploy-k8s`(Terraform, AWS CLI, GCP CLI)가 맡습니다. 이 저장소는 그 프로젝트가 배포하는 **대상 워크로드**이며, 앱 코드·컨테이너 이미지·Kustomize 매니페스트와 인프라 쪽 계약([docs/deploy.md](docs/deploy.md))을 제공합니다.
 
 ## 아키텍처
-```
-                      ┌──────────────── k8s 클러스터 (EKS / GKE / kind) ────────────────┐
- 브라우저 ─► Ingress/LB ─► nginx  (정적 React 파일 + 게이트웨이, 요청 리밋)
-                            │
-                            ├─ /api/auth/*   ──────────────────────────► auth         (로그인·가입·탈퇴, argon2)
-                            │
-                            └─ /api/board/*  ─ auth_request(/_verify) ─► auth-verify  (세션 확인만)
-                                              └─ 사용자 헤더를 붙여 ────► board-api    (읽기·쓰기 API)
 
-   auth, auth-verify ──► Redis: 세션 (session:<sid>), 사용자 이벤트 스트림 (user:events)
-   board-api         ──► Redis: 읽기 캐시 (cache:*/stale:*), 글쓰기 큐 (Streams posts:stream)
-                     ──► Postgres: 읽기 (board.posts)
-   board-worker      ──► Redis Streams 소비 (posts:stream, user:events) ─► Postgres 일괄 INSERT / 익명화
-   auth              ──► Postgres (auth.users)
-   db-migrate (Job)  ──► Postgres 스키마 마이그레이션 (db/migrations)
-                      └──────────────────────────────────────────────────────────────────┘
- Postgres / Redis: 로컬은 docker compose 또는 클러스터 안 StatefulSet,
-                   클라우드는 매니지드 서비스 (RDS·Cloud SQL / ElastiCache·Memorystore)
+### 전체 인프라 구성도
+클라우드 리소스(LB, 매니지드 DB/Redis, 레지스트리, 클러스터)는 인프라 프로젝트 `one-click-deploy-k8s`가 Terraform으로 만들고, 이 저장소는 클러스터 안에서 도는 워크로드(아래 네임스페이스 부분)를 제공합니다.
+
+```mermaid
+flowchart TB
+  user["사용자 브라우저"]
+
+  subgraph cloud["클라우드: AWS 또는 GCP (one-click-deploy-k8s가 Terraform으로 프로비저닝)"]
+    lb["L7 로드밸런서 + TLS<br/>AWS ALB + ACM / GCE LB + ManagedCertificate<br/>HTTP → HTTPS 리다이렉트"]
+
+    subgraph k8s["Kubernetes 클러스터: EKS / GKE (Cluster Autoscaler로 노드 확장)"]
+      subgraph ns["namespace: simple-web-app (dev는 simple-web-app-dev)"]
+        nginx["nginx + React 정적 파일<br/>게이트웨이 · auth_request · 레이트 리밋<br/>HPA 2~10"]
+        auth["auth<br/>가입 · 로그인 · 탈퇴 (argon2)<br/>HPA 2~20"]
+        verify["auth-verify<br/>세션 확인 전용<br/>HPA 2~10"]
+        api["board-api<br/>조회(캐시) · 작성(큐) · 삭제<br/>HPA 2~20"]
+        worker["board-worker<br/>큐 소비 → 일괄 INSERT<br/>HPA 1~10 또는 KEDA"]
+        migrate["db-migrate Job<br/>스키마 마이그레이션"]
+      end
+      subgraph addons["클러스터 애드온"]
+        keda["KEDA (선택)<br/>큐 길이로 worker 확장"]
+        prom["Prometheus<br/>(monitoring 네임스페이스)"]
+      end
+    end
+
+    subgraph data["매니지드 데이터 계층 (Pod 밖에 상태 보관)"]
+      redis[("Redis 7<br/>ElastiCache / Memorystore<br/>세션 · 캐시 · Streams 큐")]
+      pg[("PostgreSQL<br/>RDS / Cloud SQL<br/>auth.users · board.posts")]
+    end
+    reg["컨테이너 레지스트리<br/>ECR / Artifact Registry"]
+  end
+
+  user -->|HTTPS| lb --> nginx
+  nginx -->|"/api/auth/*"| auth
+  nginx -->|"auth_request /_verify"| verify
+  nginx -->|"/api/board/* + 사용자 헤더"| api
+  auth --> pg
+  auth --> redis
+  verify --> redis
+  api --> redis
+  api --> pg
+  worker --> redis
+  worker --> pg
+  migrate --> pg
+  keda -.->|"XLEN posts:stream"| redis
+  keda -.->|replicas| worker
+  prom -.->|"/metrics 수집"| ns
+  reg -.->|이미지| ns
 ```
 
+- **nginx 한 곳이 입구입니다.** 정적 파일 서빙, 라우팅, 세션 확인(`auth_request`), 레이트 리밋을 모두 여기서 처리하고, 백엔드 서비스들은 클러스터 밖으로 노출되지 않습니다(NetworkPolicy로 nginx에서 오는 요청만 받음).
+- **상태는 Pod 밖에 둡니다.** 세션·캐시·큐는 Redis, 데이터는 PostgreSQL에 있어서 앱 Pod는 언제든 늘리거나 죽여도 됩니다.
+- **클라우드 차이는 overlay에만 있습니다.** 앱은 `DATABASE_URL`, `REDIS_URL` 같은 환경변수만 받고, 레지스트리·Ingress·인증서·IP 대역은 `k8s/overlays/{aws,gcp}/{dev,prod}`에서 바꿉니다.
+
+### 컴포넌트
 | 컴포넌트 | 기술 | 역할 |
 |---|---|---|
 | nginx (`frontend` 이미지) | React + Vite + TypeScript 빌드 결과 + nginx | 정적 파일, 라우팅, `auth_request` 인증 게이트웨이, 요청 리밋 |
@@ -39,6 +75,78 @@
 | board-api | FastAPI | 게시글 조회(캐시), 작성(큐에 넣기), 삭제 |
 | board-worker | Python asyncio (board 이미지) | 글쓰기 큐와 사용자 이벤트 소비 → DB 반영 |
 | db-migrate | board 이미지, k8s Job | SQL 마이그레이션 실행 |
+
+### 요청 흐름
+글쓰기는 DB를 거치지 않고 큐에 넣은 뒤 바로 응답하고(비동기), 읽기는 Redis 캐시가 먼저 받습니다.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant U as 브라우저
+  participant N as nginx
+  participant V as auth-verify
+  participant A as board-api
+  participant R as Redis
+  participant W as board-worker
+  participant P as PostgreSQL
+
+  Note over U,P: 글쓰기 (비동기 + 백프레셔)
+  U->>N: POST /api/board/posts (Idempotency-Key)
+  N->>V: auth_request /_verify (쿠키 sid)
+  V->>R: 세션 조회
+  V-->>N: 200 + X-User-Id
+  N->>A: 요청 + 사용자 헤더
+  A->>R: 멱등 키 확인, 큐 길이 확인
+  alt 큐 길이가 QUEUE_MAX_LEN 이상
+    A-->>U: 503 QUEUE_FULL + Retry-After
+  else 여유 있음
+    A->>R: XADD posts:stream
+    A-->>U: 202 pending (DB를 기다리지 않음)
+  end
+  W->>R: XREADGROUP (최대 100건)
+  W->>P: 일괄 INSERT (ON CONFLICT DO NOTHING)
+  W->>R: XACK + XDEL, 목록 캐시 무효화
+
+  Note over U,P: 목록 조회 (캐시 + 스탬피드 방지)
+  U->>N: GET /api/board/posts
+  N->>V: auth_request /_verify
+  N->>A: 요청
+  A->>R: 첫 페이지 캐시 조회
+  alt 캐시 적중
+    R-->>A: 캐시된 목록
+  else 캐시 없음
+    A->>P: SELECT (락을 잡은 요청 하나만)
+    A->>R: 캐시 3초 + stale 사본 60초 저장
+  end
+  A-->>U: 200 목록
+```
+
+### 트래픽 폭증 대응
+재난 상황의 트래픽 폭증을 여러 단계로 나눠 흡수합니다.
+
+```mermaid
+flowchart LR
+  spike["트래픽 폭증"] --> limit["nginx 레이트 리밋<br/>과도한 클라이언트 429"]
+  limit --> read["읽기"]
+  limit --> write["쓰기"]
+  read --> cache["Redis 캐시 · stale 사본<br/>DB 부하 흡수"]
+  write --> queue["Redis Streams 큐<br/>202 즉시 응답"]
+  queue --> full{"큐가 가득 찼나?"}
+  full -->|예| reject["503 QUEUE_FULL<br/>Retry-After로 재시도 유도"]
+  full -->|아니오| wscale["KEDA 또는 HPA가<br/>worker 확장"]
+  cache --> hpa["HPA (CPU 60%)<br/>nginx · auth · auth-verify · board-api<br/>15초마다 최대 2배"]
+  hpa --> nodes["Pod가 Pending이면<br/>Cluster Autoscaler가 노드 추가"]
+  wscale --> nodes
+```
+
+| 수단 | 대상 | 막는 것 |
+|---|---|---|
+| HPA (CPU 60%, 빠른 확장 · 느린 축소) | nginx, auth, auth-verify, board-api, worker | 사용자 수 증가에 따른 정상 트래픽 증가 |
+| KEDA (`posts:stream` 길이) | board-worker | 쓰기 처리 지연(큐 적체) |
+| 큐 백프레셔 (`QUEUE_MAX_LEN`) | board-api 쓰기 | DB가 감당할 수 있는 쓰기 총량 초과 |
+| nginx 레이트 리밋 | 모든 요청 | 소수 클라이언트의 비정상 요청량 |
+| verify 분리 + argon2 동시 실행 제한 | auth, auth-verify | 로그인 폭주가 모든 요청을 밀어내는 상황 |
+| PDB, 완화된 probe, preStop | 모든 Deployment | 노드 교체·CPU 포화 중 연쇄 재시작과 롤아웃 5xx |
 
 ## 핵심 설계
 - **비동기 글쓰기 + 백프레셔:** 글쓰기는 DB에 바로 넣지 않고 Redis Streams 큐(`posts:stream`)에 넣은 뒤 `202 {status: "pending"}`를 돌려줍니다. board-worker가 최대 100건씩 묶어 멱등 INSERT(`ON CONFLICT DO NOTHING`)합니다. 쓰기가 몰릴수록 배치가 커져 DB 부담이 줄어듭니다. 큐 길이가 `QUEUE_MAX_LEN`(기본 50000)에 닿으면 `503 QUEUE_FULL` + `Retry-After`로 받지 않습니다. `Idempotency-Key` 헤더로 재시도해도 글이 중복되지 않고, 계속 실패한 메시지는 DLQ(`posts:dlq`)로 옮깁니다.
@@ -134,6 +242,26 @@ make loadtest                    # 클라우드 규모 전체 시나리오
 
 ## 환경과 배포
 클라우드(AWS EKS, GCP GKE)마다 dev와 prod 두 환경이 있습니다.
+
+```mermaid
+flowchart LR
+  feat["feature/*"] -->|"PR + CI 통과"| dev["develop"]
+  dev -->|"릴리스 PR + CI 통과"| main["main"]
+  hot["hotfix/*"] -->|"PR + CI 통과"| main
+  main -.->|back-merge| dev
+
+  dev ==>|"one-click-deploy-k8s"| denv["dev 환경<br/>overlays/{aws,gcp}/dev<br/>ns: simple-web-app-dev"]
+  main ==>|"one-click-deploy-k8s"| penv["prod 환경<br/>overlays/{aws,gcp}/prod<br/>ns: simple-web-app"]
+
+  subgraph ci["GitHub Actions CI"]
+    c1["backend 테스트"]
+    c2["frontend 테스트 · 빌드"]
+    c3["k8s 매니페스트 검증"]
+    c4["이미지 빌드"]
+  end
+  dev -.-> ci
+  main -.-> ci
+```
 
 | | prod | dev |
 |---|---|---|
