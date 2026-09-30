@@ -1,4 +1,4 @@
-.PHONY: dev down lock smoke-backend test test-backend
+.PHONY: dev down lock smoke-backend test test-backend fe-dev test-frontend
 
 dev:
 	docker compose up --build
@@ -20,3 +20,9 @@ test-backend:
 	cd services/board && uv run --extra dev pytest -q
 
 test: test-backend
+
+fe-dev:
+	cd frontend && npm run dev
+
+test-frontend:
+	cd frontend && npm ci && npm run typecheck && npm test
