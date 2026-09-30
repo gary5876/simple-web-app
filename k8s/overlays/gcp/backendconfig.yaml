@@ -1,0 +1,17 @@
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: nginx-backendconfig
+spec:
+  healthCheck:
+    type: HTTP
+    requestPath: /nginx-health
+    port: 8080
+    checkIntervalSec: 5
+    timeoutSec: 3
+    healthyThreshold: 1
+    unhealthyThreshold: 2
+  timeoutSec: 30
+  # Pod 종료 시 NEG에서 빠진 뒤 진행 중인 요청을 최대 30초 기다린다(nginx preStop 15초와 짝).
+  connectionDraining:
+    drainingTimeoutSec: 30

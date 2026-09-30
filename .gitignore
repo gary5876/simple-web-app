@@ -1,0 +1,15 @@
+.superpowers/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+node_modules/
+dist/
+.env
+.DS_Store
+frontend/node_modules/
+frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
+tests/nginx/.venv/

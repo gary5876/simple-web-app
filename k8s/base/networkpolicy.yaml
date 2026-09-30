@@ -1,0 +1,88 @@
+# 앱 서비스 인그레스 제한. nginx는 LB에서 직접 트래픽을 받으므로 정책을 두지 않는다.
+# /internal/verify 는 nginx Pod에서만 auth에 닿는다(헤더 위조 방지).
+# monitoring 네임스페이스 허용은 Prometheus 수집용 인프라 계약이다(docs/deploy.md, Task 9).
+# kubelet 프로브는 노드에서 오는 트래픽이라 이 정책의 영향을 받지 않는다.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: auth-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: auth
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: nginx
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 8000
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: board-api-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: board-api
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: nginx
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 8000
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: board-worker-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: board-worker
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 9100
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: auth-verify-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: auth-verify
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: nginx
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 8000
+          protocol: TCP

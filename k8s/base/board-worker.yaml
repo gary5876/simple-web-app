@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: board-worker
+  labels:
+    app.kubernetes.io/name: board-worker
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: board-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: board-worker
+        simple-web-app/data-access: "true"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9100"
+        prometheus.io/path: /metrics
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: board-worker
+          image: simple-web-app/board
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "board.worker"]
+          ports:
+            - name: metrics
+              containerPort: 9100
+          envFrom:
+            - configMapRef:
+                name: app-config
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: app-db
+                  key: DATABASE_URL
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: app-redis
+                  key: REDIS_URL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          # 부하로 CPU가 부족할 때 probe 한 번 늦었다고 Pod를 죽이면 재시작 폭주가 나므로 liveness는 넉넉히(5초 x 6회) 둔다.
+          livenessProbe:
+            exec:
+              command: ["python", "-m", "board.worker_health"]
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

@@ -1,0 +1,9 @@
+# GCE Ingress의 HTTP(80) 요청을 HTTPS로 301 리다이렉트한다. COOKIE_SECURE=true라 HTTP로는 로그인이 안 된다.
+apiVersion: networking.gke.io/v1beta1
+kind: FrontendConfig
+metadata:
+  name: web-frontendconfig
+spec:
+  redirectToHttps:
+    enabled: true
+    responseCodeName: MOVED_PERMANENTLY_DEFAULT
