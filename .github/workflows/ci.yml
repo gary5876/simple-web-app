@@ -11,7 +11,8 @@ on:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # PR만 이전 실행을 취소한다. develop/main 푸시는 끝까지 실행한다.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -19,6 +20,7 @@ permissions:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -29,6 +31,7 @@ jobs:
 
   frontend:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: frontend
@@ -46,6 +49,7 @@ jobs:
 
   k8s:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       KUBECONFORM_VERSION: v0.7.0
     steps:
@@ -64,6 +68,7 @@ jobs:
     if: github.event_name == 'push'
     needs: [backend, frontend, k8s]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       # 빌드만 확인한다(푸시 없음). 빌드 컨텍스트는 저장소 루트다.
