@@ -11,7 +11,7 @@ describe('safeNext', () => {
   it('accepts same-origin paths', () => {
     expect(safeNext('/write')).toBe('/write')
   })
-  it.each([null, '', '//evil.example.com', 'https://evil.example.com'])('rejects %s', (raw) => {
+  it.each([null, '', '//evil.example.com', 'https://evil.example.com', '/\\evil.example.com', '/a\\b'])('rejects %s', (raw) => {
     expect(safeNext(raw)).toBe('/')
   })
 })

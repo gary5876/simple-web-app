@@ -85,6 +85,36 @@ describe('request', () => {
     expect(fetch).toHaveBeenCalledTimes(MAX_RETRIES + 1)
   })
 
+  it('does not auto-retry when Retry-After exceeds 30 seconds', async () => {
+    const { client, fetch, sleep } = setup([
+      jsonResponse(429, { code: 'RATE_LIMITED', message: 'slow' }, { 'Retry-After': '31' }),
+    ])
+    await expect(client.request('/api/x')).rejects.toMatchObject({ status: 429, retryAfter: 31 })
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(sleep).not.toHaveBeenCalled()
+  })
+
+  it('still retries when Retry-After is exactly 30 seconds', async () => {
+    const { client, sleep } = setup([
+      jsonResponse(429, { code: 'RATE_LIMITED', message: 'slow' }, { 'Retry-After': '30' }),
+      jsonResponse(200, { ok: true }),
+    ])
+    await expect(client.request('/api/x')).resolves.toEqual({ ok: true })
+    expect(sleep).toHaveBeenCalledWith(30000)
+  })
+
+  it('never auto-retries TOO_MANY_ATTEMPTS', async () => {
+    const { client, fetch, sleep } = setup([
+      jsonResponse(429, { code: 'TOO_MANY_ATTEMPTS', message: 'locked' }, { 'Retry-After': '2' }),
+    ])
+    await expect(client.request('/api/auth/login', { method: 'POST', body: {} })).rejects.toMatchObject({
+      status: 429,
+      code: 'TOO_MANY_ATTEMPTS',
+    })
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(sleep).not.toHaveBeenCalled()
+  })
+
   it('sends identical headers on every retry', async () => {
     const { client, fetch } = setup([
       jsonResponse(503, { code: 'QUEUE_FULL', message: 'busy' }),

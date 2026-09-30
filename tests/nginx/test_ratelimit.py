@@ -50,6 +50,23 @@ def test_read_limit_blocks_a_flooding_ip() -> None:
     assert 429 in statuses
 
 
+def test_delete_account_is_rate_limited_but_get_me_is_not(credentials: dict[str, str]) -> None:
+    # 계정 삭제(비밀번호 재확인)는 로그인과 같은 예산으로 무차별 대입을 막고, GET /me는 영향받지 않는다.
+    client = login_client(credentials)
+    with client:
+        limited = None
+        for _ in range(25):
+            res = client.request("DELETE", "/api/auth/me", json={"password": "definitely-wrong"})
+            if res.status_code == 429:
+                limited = res
+                break
+            assert res.status_code in (400, 401, 403), res.text
+        assert limited is not None, "DELETE /api/auth/me에 리밋이 걸리지 않았다"
+        assert limited.json()["code"] == "RATE_LIMITED"
+        assert limited.headers["retry-after"] == "2"
+        assert client.get("/api/auth/me").status_code == 200
+
+
 def test_login_limit_ignores_spoofed_forwarded_for() -> None:
     # 로그인 리밋을 소진시키므로 이 파일의 마지막 테스트여야 한다.
     limited = None

@@ -21,4 +21,17 @@ describe('Layout', () => {
     expect(screen.queryByText('로그인')).not.toBeInTheDocument()
     expect(screen.queryByText('회원가입')).not.toBeInTheDocument()
   }, 15000)
+
+  it('shows no auth links while the me query is pending', async () => {
+    stubFetch(() => new Promise<Response>(() => {}))
+    render(
+      <QueryClientProvider client={createTestQueryClient()}>
+        <MemoryRouter><Layout><p>본문</p></Layout></MemoryRouter>
+      </QueryClientProvider>,
+    )
+    await screen.findByText('본문')
+    expect(screen.queryByText('로그인')).not.toBeInTheDocument()
+    expect(screen.queryByText('회원가입')).not.toBeInTheDocument()
+    expect(screen.queryByText('글쓰기')).not.toBeInTheDocument()
+  })
 })

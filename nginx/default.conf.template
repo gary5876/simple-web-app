@@ -17,9 +17,17 @@ map $request_method $board_write_key {
     default $cookie_sid;
 }
 
+# 계정 삭제(DELETE /api/auth/me)는 비밀번호를 재확인하므로 로그인과 같은 예산으로 무차별 대입을 막는다.
+# 다른 메서드(GET /me 등)는 키가 비어 세지 않는다. auth_login과 별도 존이라 로그인 예산을 나눠 쓰지 않는다.
+map $request_method $auth_sensitive_key {
+    DELETE  $binary_remote_addr;
+    default "";
+}
+
 limit_req_zone $board_read_key     zone=board_read:10m  rate=${RATE_READ};
 limit_req_zone $board_write_key    zone=board_write:10m rate=${RATE_WRITE};
 limit_req_zone $binary_remote_addr zone=auth_login:10m  rate=${RATE_LOGIN};
+limit_req_zone $auth_sensitive_key zone=auth_sensitive:10m rate=${RATE_LOGIN};
 limit_req_status 429;
 limit_req_log_level warn;
 
@@ -81,6 +89,11 @@ server {
 
     location ~ ^/api/auth/(login|signup)$ {
         limit_req zone=auth_login burst=${BURST_LOGIN} nodelay;
+        include /etc/nginx/snippets/auth_proxy.conf;
+    }
+
+    location = /api/auth/me {
+        limit_req zone=auth_sensitive burst=${BURST_LOGIN} nodelay;
         include /etc/nginx/snippets/auth_proxy.conf;
     }
 

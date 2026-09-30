@@ -41,6 +41,9 @@ const RETRYABLE_STATUS = new Set([429, 503])
 const BASE_DELAY_MS = 500
 const MAX_DELAY_MS = 8000
 const JITTER_MS = 250
+// 이보다 오래 기다리라는 응답(로그인 잠금 등)은 UI를 멈추지 않도록 자동 재시도하지 않는다.
+const MAX_AUTO_RETRY_AFTER_SEC = 30
+const NEVER_RETRY_CODES = new Set(['TOO_MANY_ATTEMPTS'])
 
 export function computeBackoff(attempt: number, retryAfterSec: number | null, random: () => number): number {
   const exponential = Math.min(BASE_DELAY_MS * 2 ** attempt, MAX_DELAY_MS)
@@ -67,6 +70,8 @@ export function createClient(deps: ClientDeps) {
       }
       const error = await toApiError(res)
       if (!RETRYABLE_STATUS.has(res.status) || attempt >= MAX_RETRIES) throw error
+      if (NEVER_RETRY_CODES.has(error.code)) throw error
+      if (error.retryAfter !== null && error.retryAfter > MAX_AUTO_RETRY_AFTER_SEC) throw error
       const delayMs = computeBackoff(attempt, error.retryAfter, deps.random)
       retryListener?.({ attempt: attempt + 1, delayMs, status: res.status })
       await deps.sleep(delayMs)
