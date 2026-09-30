@@ -26,7 +26,7 @@ def test_hashed_assets_are_immutable(anon: httpx.Client) -> None:
     assert match, index
     res = anon.get(match.group(1))
     assert res.status_code == 200
-    assert "immutable" in res.headers["cache-control"]
+    assert res.headers["cache-control"] == "public, max-age=31536000, immutable"
     assert anon.get("/assets/does-not-exist.js").status_code == 404
 
 
@@ -82,3 +82,27 @@ def test_spoofed_degraded_header_is_stripped(session_client: httpx.Client) -> No
         headers={**new_post_headers(), "X-Auth-Degraded": "1"},
     )
     assert res.status_code == 202, res.text
+
+
+def test_spoofed_lowercase_user_header_is_stripped(anon: httpx.Client) -> None:
+    res = anon.post(
+        "/api/board/posts",
+        json={"title": "spoof", "body": "lowercase"},
+        headers={**new_post_headers(), "x-user-id": str(uuid.uuid4()), "x-user-nickname": "evil"},
+    )
+    assert res.status_code == 401
+
+
+def test_anonymous_spoofed_degraded_header_still_gets_401(anon: httpx.Client) -> None:
+    # 위조한 X-Auth-Degraded가 전달되면 board-api가 401 대신 503을 반환한다.
+    res = anon.post(
+        "/api/board/posts",
+        json={"title": "spoof", "body": "degraded"},
+        headers={**new_post_headers(), "X-Auth-Degraded": "1"},
+    )
+    assert res.status_code == 401
+
+
+def test_spoofed_user_header_on_auth_me_still_gets_401(anon: httpx.Client) -> None:
+    res = anon.get("/api/auth/me", headers={"X-User-Id": str(uuid.uuid4()), "X-User-Nickname": "evil"})
+    assert res.status_code == 401

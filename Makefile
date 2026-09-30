@@ -30,9 +30,9 @@ test-frontend:
 NGINX_TEST_VENV := tests/nginx/.venv
 
 $(NGINX_TEST_VENV)/bin/pytest: tests/nginx/requirements.txt
-	uv venv --python 3.12 $(NGINX_TEST_VENV)
+	uv venv --clear --python 3.12 $(NGINX_TEST_VENV)
 	uv pip install --python $(NGINX_TEST_VENV)/bin/python -q -r tests/nginx/requirements.txt
 	touch $@
 
 test-nginx: $(NGINX_TEST_VENV)/bin/pytest
-	$(NGINX_TEST_VENV)/bin/pytest tests/nginx/test_routing.py -v
+	$(NGINX_TEST_VENV)/bin/pytest tests/nginx/test_config.py tests/nginx/test_routing.py tests/nginx/test_degraded.py tests/nginx/test_ratelimit.py -v

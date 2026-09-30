@@ -18,5 +18,6 @@ ENV AUTH_UPSTREAM=auth:8000 \
     BURST_LOGIN=10
 COPY nginx/default.conf.template /etc/nginx/templates/default.conf.template
 COPY nginx/snippets/ /etc/nginx/snippets/
+COPY --chmod=755 frontend/docker/15-real-ip.sh /docker-entrypoint.d/15-real-ip.sh
 COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 8080
