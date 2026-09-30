@@ -1,5 +1,7 @@
 # simple-web-app
 
+[![CI](https://github.com/gary5876/simple-web-app/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/gary5876/simple-web-app/actions/workflows/ci.yml)
+
 **이 저장소는 인프라(k8s, 오토스케일링, 멀티클라우드 배포) 공부용으로 만든 간단한 커뮤니티 게시판 서비스입니다.**
 실제 운영용 제품이 아니라, 인프라를 실습하고 시연하기 위한 데모 워크로드입니다.
 
