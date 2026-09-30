@@ -18,6 +18,7 @@ configMapGenerator:
     behavior: merge
     literals:
       - COOKIE_SECURE=false
+# 아래 자격 증명(app/app)은 kind 로컬 전용 값이다. 클라우드 Secret은 Terraform이 만든다(docs/deploy.md).
 secretGenerator:
   - name: app-db
     literals:

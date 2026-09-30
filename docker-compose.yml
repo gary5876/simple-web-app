@@ -1,5 +1,6 @@
 name: simple-web-app
 
+# 이 파일의 자격 증명(app/app)은 로컬 개발 전용 값이다.
 x-backend-env: &backend-env
   DATABASE_URL: postgresql+asyncpg://app:app@postgres:5432/app
   REDIS_URL: redis://redis:6379/0
