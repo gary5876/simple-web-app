@@ -1,8 +1,16 @@
-"""board-worker: posts:stream 을 소비해 board.posts 에 저장한다."""
+"""board-worker: posts:stream 과 user:events 를 소비해 DB 에 반영한다."""
+import asyncio
 import logging
+import os
+import signal
+import socket
+import time
 import uuid
+from contextlib import suppress
 from datetime import datetime
+from pathlib import Path
 
+from prometheus_client import start_http_server
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError
 from sqlalchemy import text
@@ -10,12 +18,19 @@ from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from board import keys, posts_repo
+from board import cache, keys, posts_repo
 from board.config import Settings
+from board.infra import make_engine, make_redis
+from board.metrics import refresh_queue_metrics
+from board.observability import configure_logging
 
 log = logging.getLogger("board.worker")
 
 Entry = tuple[str, dict[str, str]]
+RECLAIM_INTERVAL_SECONDS = 10
+METRICS_INTERVAL_SECONDS = 5
+INITIAL_BACKOFF_SECONDS = 0.5
+MAX_BACKOFF_SECONDS = 5.0
 
 
 class TransientDbError(Exception):
@@ -205,3 +220,104 @@ class Worker:
             pipe.xack(keys.POSTS_STREAM, keys.POSTS_GROUP, message_id)
             pipe.xdel(keys.POSTS_STREAM, message_id)
             await pipe.execute()
+
+    async def process_user_events_once(self) -> int:
+        resp = await self.redis.xreadgroup(
+            keys.USER_EVENTS_GROUP, self.name, {keys.USER_EVENTS: ">"}, count=self.settings.worker_batch_size
+        )
+        entries: list[Entry] = resp[0][1] if resp else []
+        for mid, fields in entries:
+            await self._handle_user_event(mid, fields)
+        return len(entries)
+
+    async def reclaim_user_events_once(self) -> int:
+        result = await self.redis.xautoclaim(
+            keys.USER_EVENTS,
+            keys.USER_EVENTS_GROUP,
+            self.name,
+            min_idle_time=self.settings.claim_idle_ms,
+            start_id="0-0",
+            count=self.settings.worker_batch_size,
+        )
+        claimed: list[Entry] = [(mid, fields) for mid, fields in result[1] if fields]
+        for mid, fields in claimed:
+            await self._handle_user_event(mid, fields)
+        return len(claimed)
+
+    async def _handle_user_event(self, message_id: str, fields: dict[str, str]) -> None:
+        if fields.get("type") == "user_deleted":
+            try:
+                user_id = str(uuid.UUID(fields["user_id"]))
+            except (KeyError, ValueError):
+                log.error("dropping invalid user event", extra={"extra_fields": {"message_id": message_id}})
+            else:
+                # DB 오류는 그대로 올려서 ACK 하지 않는다. 익명화는 멱등이라 reclaim 으로 다시 처리하면 된다.
+                post_ids = await posts_repo.anonymize_author(self.engine, user_id)
+                await cache.invalidate(self.redis, *post_ids)
+        async with self.redis.pipeline(transaction=True) as pipe:
+            pipe.xack(keys.USER_EVENTS, keys.USER_EVENTS_GROUP, message_id)
+            pipe.xdel(keys.USER_EVENTS, message_id)
+            await pipe.execute()
+
+    async def run(self, stop: asyncio.Event) -> None:
+        heartbeat = Path(self.settings.heartbeat_path)
+        groups_ready = False
+        backoff = INITIAL_BACKOFF_SECONDS
+        last_reclaim = last_metrics = 0.0
+        log.info("worker started", extra={"extra_fields": {"consumer": self.name}})
+        while not stop.is_set():
+            # DB/Redis 장애 중에도 heartbeat 를 갱신한다. 의존성 장애로 Pod 가 재시작되면 안 된다.
+            heartbeat.touch()
+            try:
+                if not groups_ready:
+                    await self.ensure_groups()
+                    groups_ready = True
+                await self.process_posts_once(block_ms=self.settings.worker_block_ms)
+                await self.process_user_events_once()
+                now = time.monotonic()
+                if now - last_reclaim >= RECLAIM_INTERVAL_SECONDS:
+                    await self.reclaim_posts_once()
+                    await self.reclaim_user_events_once()
+                    last_reclaim = now
+                if now - last_metrics >= METRICS_INTERVAL_SECONDS:
+                    await refresh_queue_metrics(self.redis)
+                    last_metrics = now
+                backoff = INITIAL_BACKOFF_SECONDS
+            except Exception as exc:
+                if isinstance(exc, ResponseError) and "NOGROUP" in str(exc):
+                    # 영속성 없는 Redis 가 재시작되어 스트림/그룹이 사라졌다. 다음 반복에서 다시 만든다.
+                    groups_ready = False
+                log.warning(
+                    "worker iteration failed, backing off",
+                    extra={"extra_fields": {"error": repr(exc), "backoff_seconds": backoff}},
+                )
+                with suppress(TimeoutError):
+                    await asyncio.wait_for(stop.wait(), timeout=backoff)
+                backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
+        log.info("worker stopped")
+
+
+async def _run(settings: Settings) -> None:
+    engine = make_engine(settings.database_url)
+    redis = make_redis(settings.redis_url)
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, stop.set)
+    name = os.environ.get("HOSTNAME") or f"{socket.gethostname()}-{uuid.uuid4().hex[:6]}"
+    try:
+        await Worker(engine, redis, settings, name).run(stop)
+    finally:
+        await redis.aclose()
+        await engine.dispose()
+
+
+def main() -> None:
+    settings = Settings()
+    configure_logging(settings.log_level)
+    start_http_server(settings.worker_metrics_port)
+    asyncio.run(_run(settings))
+
+
+if __name__ == "__main__":
+    main()
