@@ -44,7 +44,7 @@ apt-get update
 apt-get install -y k6
 
 if [ "$role" = lab ]; then
-  apt-get install -y docker.io
+  apt-get install -y docker.io docker-buildx
   curl -fsSLo /usr/local/bin/kind https://kind.sigs.k8s.io/dl/$KIND_VERSION/kind-linux-amd64
   curl -fsSLo /usr/local/bin/kubectl https://dl.k8s.io/release/$KUBECTL_VERSION/bin/linux/amd64/kubectl
   chmod +x /usr/local/bin/kind /usr/local/bin/kubectl
