@@ -61,3 +61,18 @@ async def get_by_id(engine: AsyncEngine, user_id: str) -> dict | None:
             )
         ).mappings().first()
     return _user(row) if row else None
+
+
+async def soft_delete(engine: AsyncEngine, user_id: str) -> bool:
+    """탈퇴 처리. 이메일/닉네임을 익명화해 같은 이메일로 재가입할 수 있게 한다. 이미 탈퇴했으면 False."""
+    async with engine.begin() as conn:
+        result = await conn.execute(
+            text(
+                "UPDATE auth.users SET deleted_at = now(), "
+                "email = 'deleted-' || id::text || '@deleted.invalid', "
+                "nickname = 'deleted-' || id::text "
+                "WHERE id = :id AND deleted_at IS NULL"
+            ),
+            {"id": uuid.UUID(user_id)},
+        )
+    return result.rowcount == 1

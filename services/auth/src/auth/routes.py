@@ -8,6 +8,7 @@ from redis.exceptions import RedisError
 from auth import users
 from auth.config import Settings
 from auth.errors import ApiError
+from auth.events import publish_user_deleted
 from auth.login_limiter import LoginLimiter
 from auth.passwords import DUMMY_HASH, hash_password, verify_password
 from auth.sessions import SessionStore
@@ -32,6 +33,10 @@ class UserOut(BaseModel):
     id: str
     email: str
     nickname: str
+
+
+class DeleteAccountIn(BaseModel):
+    password: str = Field(min_length=1, max_length=128)
 
 
 def _store(request: Request) -> SessionStore:
@@ -115,6 +120,22 @@ async def logout(request: Request) -> Response:
 async def me(request: Request) -> UserOut:
     session = await _current_session(request)
     return UserOut(id=session["user_id"], email=session["email"], nickname=session["nickname"])
+
+
+@router.delete("/api/auth/me", status_code=204)
+async def delete_account(body: DeleteAccountIn, request: Request) -> Response:
+    """탈퇴. 각 단계가 멱등이라 중간에 실패해도 같은 요청을 다시 보내면 끝까지 진행된다."""
+    session = await _current_session(request)
+    engine = request.app.state.engine
+    user = await users.get_by_id(engine, session["user_id"])
+    if user is None or not await verify_password(user["password_hash"], body.password):
+        raise ApiError(403, "FORBIDDEN", "비밀번호가 올바르지 않습니다.")
+    await users.soft_delete(engine, user["id"])
+    await _store(request).delete_all(user["id"])
+    await publish_user_deleted(request.app.state.redis, user["id"])
+    response = Response(status_code=204)
+    _clear_cookie(response, request.app.state.settings)
+    return response
 
 
 @router.get("/internal/verify", include_in_schema=False)
