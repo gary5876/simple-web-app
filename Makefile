@@ -40,7 +40,7 @@ $(NGINX_TEST_VENV)/bin/pytest: tests/nginx/requirements.txt
 	touch $@
 
 test-nginx: $(NGINX_TEST_VENV)/bin/pytest
-	$(NGINX_TEST_VENV)/bin/pytest tests/nginx/test_config.py tests/nginx/test_routing.py tests/nginx/test_degraded.py tests/nginx/test_ratelimit.py -v
+	$(NGINX_TEST_VENV)/bin/pytest tests/nginx/test_config.py tests/nginx/test_routing.py tests/nginx/test_degraded.py tests/nginx/test_ratelimit.py tests/nginx/test_perf_log.py -v
 
 # ---------- k8s ----------
 NS ?= simple-web-app

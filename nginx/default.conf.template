@@ -29,6 +29,15 @@ limit_req_zone $board_write_key    zone=board_write:10m rate=${RATE_WRITE};
 limit_req_zone $binary_remote_addr zone=auth_login:10m  rate=${RATE_LOGIN};
 limit_req_zone $auth_sensitive_key zone=auth_sensitive:10m rate=${RATE_LOGIN};
 limit_req_status 429;
+
+# 부하 테스트 분석용 access log (loadtest/analyze.py가 읽는다). 시간 단위는 초.
+#   rt: nginx가 요청을 받은 뒤 응답을 다 보낼 때까지, urt: 본 요청 upstream(board-api/auth) 응답 시간,
+#   vt: auth_request(/_verify) 응답 시간, st_app/st_verify: 앱이 보낸 Server-Timing(구간별 ms).
+# Server-Timing은 로그에만 남기고 클라이언트에는 숨긴다(snippets/proxy_common.conf).
+log_format perf escape=json
+    '{"ts":$msec,"rid":"$request_id","m":"$request_method","uri":"$request_uri","status":$status,'
+    '"rt":$request_time,"urt":"$upstream_response_time","uct":"$upstream_connect_time",'
+    '"vt":"$verify_time","st_app":"$upstream_http_server_timing","st_verify":"$verify_server_timing"}';
 limit_req_log_level warn;
 
 upstream auth_upstream {
@@ -68,6 +77,11 @@ server {
 
     # location에서 add_header를 쓰면 여기 값은 상속되지 않으므로 그런 location에는 다시 적는다.
     add_header X-Request-ID $request_id always;
+
+    access_log /var/log/nginx/access.log perf;
+    # auth_request를 거치지 않는 요청에서도 로그 변수가 정의돼 있도록 빈 값으로 둔다.
+    set $verify_time "";
+    set $verify_server_timing "";
 
     location = /nginx-health {
         access_log off;
@@ -120,6 +134,8 @@ server {
         auth_request_set $auth_user_id $upstream_http_x_user_id;
         auth_request_set $auth_user_nickname $upstream_http_x_user_nickname;
         auth_request_set $auth_degraded $upstream_http_x_auth_degraded;
+        auth_request_set $verify_time $upstream_response_time;
+        auth_request_set $verify_server_timing $upstream_http_server_timing;
 
         include /etc/nginx/snippets/proxy_common.conf;
         # proxy_set_header는 클라이언트가 보낸 같은 이름의 헤더를 덮어쓴다. 비어 있으면 전달하지 않는다.
