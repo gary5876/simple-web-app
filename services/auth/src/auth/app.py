@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from auth import health
+from auth import health, routes
 from auth.config import Settings
 from auth.errors import install_error_handlers
 from auth.infra import make_engine, make_redis
@@ -29,4 +29,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     install_error_handlers(app)
     install_metrics_route(app)
     app.include_router(health.router)
+    app.include_router(routes.router)
     return app
