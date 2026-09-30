@@ -1,5 +1,8 @@
+import asyncpg
+import asyncpg.exceptions as pgexc
 import pytest
 import sqlalchemy.exc
+from sqlalchemy.dialects.postgresql.asyncpg import AsyncAdapt_asyncpg_connection, AsyncAdapt_asyncpg_dbapi
 
 from board.worker import TransientDbError, is_transient
 from helpers import BROKEN_DATABASE_URL, enqueue, fetch_posts, new_user_id, post_headers
@@ -7,6 +10,29 @@ from helpers import BROKEN_DATABASE_URL, enqueue, fetch_posts, new_user_id, post
 
 def test_pool_timeout_is_transient():
     assert is_transient(sqlalchemy.exc.TimeoutError())
+
+
+def _wrapped_like_sqlalchemy(pg_error: Exception) -> sqlalchemy.exc.DBAPIError:
+    dbapi = AsyncAdapt_asyncpg_dbapi(asyncpg)
+    try:
+        AsyncAdapt_asyncpg_connection._handle_exception_no_connection(dbapi, pg_error)
+    except Exception as adapted:
+        return sqlalchemy.exc.DBAPIError.instance("SELECT 1", None, adapted, dbapi.Error)
+    raise AssertionError("unreachable")
+
+
+@pytest.mark.parametrize(
+    "pg_error",
+    [pgexc.CannotConnectNowError("starting up"), pgexc.TooManyConnectionsError("too many"), pgexc.ReadOnlySQLTransactionError("ro")],
+)
+def test_postgres_outage_sqlstates_are_transient(pg_error):
+    wrapped = _wrapped_like_sqlalchemy(pg_error)
+    assert not wrapped.connection_invalidated
+    assert is_transient(wrapped)
+
+
+def test_data_error_is_not_transient():
+    assert not is_transient(_wrapped_like_sqlalchemy(pgexc.CharacterNotInRepertoireError("bad NUL")))
 
 
 async def test_worker_persists_queued_post(client, worker, engine, rdb):
@@ -101,3 +127,21 @@ async def test_repeatedly_failing_message_goes_to_dlq(client, make_worker, setti
     assert await fetch_posts(engine) == []
     assert await rdb.xlen("posts:dlq") == 1
     assert (await client.get(f"/api/board/posts/{post_id}")).json() == {"status": "failed"}
+
+
+async def test_reclaim_does_not_dead_letter_during_db_outage(make_worker, settings, rdb):
+    await enqueue(rdb, settings, new_user_id())
+    broken = settings.model_copy(update={"database_url": BROKEN_DATABASE_URL, "claim_idle_ms": 0, "max_deliveries": 1})
+    async with make_worker(broken) as w:
+        await rdb.xreadgroup("writers", "dead-worker", {"posts:stream": ">"}, count=10)
+        with pytest.raises(TransientDbError):
+            await w.reclaim_posts_once()
+    assert await rdb.xlen("posts:dlq") == 0
+    assert await rdb.xlen("posts:stream") == 1
+
+
+async def test_successful_save_clears_stale_failed_marker(worker, settings, rdb):
+    post_id = await enqueue(rdb, settings, new_user_id())
+    await rdb.set(f"failed:{post_id}", "1")
+    assert await worker.process_posts_once() == 1
+    assert await rdb.exists(f"failed:{post_id}") == 0

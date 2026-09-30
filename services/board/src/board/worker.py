@@ -5,6 +5,7 @@ from datetime import datetime
 
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError
+from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -21,13 +22,34 @@ class TransientDbError(Exception):
     """DB 연결 문제. 메시지를 버리지 않고 나중에 다시 시도한다."""
 
 
+_TRANSIENT_SQLSTATES = {"57P01", "57P02", "57P03", "25006", "40001", "40P01"}
+
+
+def _sqlstate(exc: BaseException) -> str | None:
+    """exc, exc.orig, __cause__ 체인에서 SQLSTATE 를 찾는다 (asyncpg 예외는 .sqlstate 를 가진다)."""
+    seen: set[int] = set()
+    stack: list[BaseException | None] = [exc]
+    while stack:
+        cur = stack.pop()
+        if cur is None or id(cur) in seen:
+            continue
+        seen.add(id(cur))
+        state = getattr(cur, "sqlstate", None)
+        if isinstance(state, str) and state:
+            return state
+        stack.extend([getattr(cur, "orig", None), cur.__cause__])
+    return None
+
+
 def is_transient(exc: BaseException) -> bool:
     # PoolTimeoutError: 커넥션 풀 고갈. DB 가 바쁜 것이므로 배치를 보존하고 재시도한다.
     if isinstance(exc, (OSError, ConnectionError, PoolTimeoutError)):
         return True
     if isinstance(exc, DBAPIError):
-        return bool(exc.connection_invalidated) or isinstance(exc, (OperationalError, InterfaceError))
-    return False
+        if exc.connection_invalidated or isinstance(exc, (OperationalError, InterfaceError)):
+            return True
+    state = _sqlstate(exc)
+    return state is not None and (state[:2] in ("08", "53") or state in _TRANSIENT_SQLSTATES)
 
 
 def decode_post(fields: dict[str, str]) -> dict:
@@ -87,10 +109,13 @@ class Worker:
         claimed: list[Entry] = [(mid, fields) for mid, fields in result[1] if fields]
         if not claimed:
             return 0
+        counts = {mid: await self._deliveries(mid) for mid, _ in claimed}
+        if any(n > self.settings.max_deliveries for n in counts.values()):
+            # DB 장애 중에는 전달 횟수가 쌓여도 DLQ 로 보내지 않는다.
+            await self._probe_db()
         retry: list[Entry] = []
         for mid, fields in claimed:
-            info = await self.redis.xpending_range(keys.POSTS_STREAM, keys.POSTS_GROUP, min=mid, max=mid, count=1)
-            deliveries = info[0]["times_delivered"] if info else 0
+            deliveries = counts[mid]
             if deliveries > self.settings.max_deliveries:
                 await self.dead_letter(mid, fields, f"delivered {deliveries} times")
             else:
@@ -98,6 +123,21 @@ class Worker:
         if retry:
             await self._persist_posts(retry)
         return len(claimed)
+
+    async def _deliveries(self, message_id: str) -> int:
+        info = await self.redis.xpending_range(
+            keys.POSTS_STREAM, keys.POSTS_GROUP, min=message_id, max=message_id, count=1
+        )
+        return info[0]["times_delivered"] if info else 0
+
+    async def _probe_db(self) -> None:
+        try:
+            async with self.engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+        except Exception as exc:
+            if is_transient(exc):
+                raise TransientDbError(repr(exc)) from exc
+            raise
 
     async def _persist_posts(self, entries: list[Entry]) -> None:
         decoded: list[tuple[str, dict[str, str], dict]] = []
@@ -147,6 +187,7 @@ class Worker:
             pipe.xack(keys.POSTS_STREAM, keys.POSTS_GROUP, *message_ids)
             pipe.xdel(keys.POSTS_STREAM, *message_ids)
             pipe.delete(*(keys.pending(post_id) for _, post_id in items))
+            pipe.delete(*(keys.failed(post_id) for _, post_id in items))
             pipe.delete(keys.FIRST_PAGE)
             await pipe.execute()
 
