@@ -86,7 +86,16 @@ k8s-local: ## kind 클러스터 생성 → 이미지 빌드·로드 → overlay 
 		kubectl -n $(NS) delete scaledobject board-worker --ignore-not-found; fi
 	-kubectl -n $(NS) delete job db-migrate --ignore-not-found --wait=true
 	kubectl apply -k k8s/overlays/$(LOCAL_OVERLAY)
-	kubectl -n $(NS) wait --for=condition=complete job/db-migrate --timeout=600s
+	@# complete만 기다리면 Job이 실패해도 600초를 다 채운다. Complete/Failed 중 먼저 오는 쪽을 보고, 실패면 로그를 찍고 멈춘다.
+	@echo "waiting for job/db-migrate"; \
+	for i in $$(seq 1 122); do \
+		st=$$(kubectl -n $(NS) get job db-migrate -o jsonpath='{range .status.conditions[?(@.status=="True")]}{.type}{" "}{end}'); \
+		case " $$st" in \
+			*" Complete "*) echo "db-migrate complete"; exit 0;; \
+			*" Failed "*) echo "db-migrate FAILED" >&2; \
+				kubectl -n $(NS) logs job/db-migrate --all-containers --tail=200 >&2; exit 1;; \
+		esac; sleep 5; \
+	done; echo "db-migrate timed out" >&2; kubectl -n $(NS) logs job/db-migrate --all-containers --tail=200 >&2; exit 1
 	kubectl -n $(NS) rollout restart deployment $(APP_DEPLOYMENTS)
 	@for d in $(APP_DEPLOYMENTS); do kubectl -n $(NS) rollout status deployment/$$d --timeout=180s || exit 1; done
 
