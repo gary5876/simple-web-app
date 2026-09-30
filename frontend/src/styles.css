@@ -20,3 +20,4 @@ button.danger { border-color: #cf222e; color: #cf222e; }
 .badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: #fff8c5; }
 .body { white-space: pre-wrap; background: #fff; border: 1px solid #d0d7de; border-radius: 6px; padding: 16px; }
 .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: #1f2328; color: #fff; padding: 10px 16px; border-radius: 6px; }
+.field-error { display: block; color: #cf222e; font-size: 0.875rem; }
