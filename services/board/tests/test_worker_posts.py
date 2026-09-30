@@ -1,7 +1,11 @@
+import asyncio
+import time
+
 import asyncpg
 import asyncpg.exceptions as pgexc
 import pytest
 import sqlalchemy.exc
+from sqlalchemy import text
 from sqlalchemy.dialects.postgresql.asyncpg import AsyncAdapt_asyncpg_connection, AsyncAdapt_asyncpg_dbapi
 
 from board.worker import TransientDbError, is_transient
@@ -10,6 +14,20 @@ from helpers import BROKEN_DATABASE_URL, enqueue, fetch_posts, new_user_id, post
 
 def test_pool_timeout_is_transient():
     assert is_transient(sqlalchemy.exc.TimeoutError())
+
+
+def test_statement_timeout_error_is_transient():
+    # asyncpg 의 command_timeout 은 asyncio.TimeoutError(= 내장 TimeoutError, OSError 하위)를 던진다.
+    assert is_transient(asyncio.TimeoutError())
+
+
+async def test_engine_enforces_statement_timeout(engine):
+    started = time.monotonic()
+    with pytest.raises(Exception) as info:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT pg_sleep(10)"))
+    assert time.monotonic() - started < 8
+    assert is_transient(info.value)
 
 
 def _wrapped_like_sqlalchemy(pg_error: Exception) -> sqlalchemy.exc.DBAPIError:
@@ -119,19 +137,23 @@ async def test_reclaims_messages_of_dead_consumer(make_worker, settings, rdb, en
     assert await rdb.xlen("posts:stream") == 0
 
 
-async def test_repeatedly_failing_message_goes_to_dlq(client, make_worker, settings, rdb, engine):
+async def test_over_delivered_valid_post_is_inserted_on_reclaim(client, make_worker, settings, rdb, engine):
+    """긴 DB 장애 뒤에는 전달 횟수가 많이 쌓인다. 정상 글은 횟수와 상관없이 저장되어야 한다."""
     post_id = await enqueue(rdb, settings, new_user_id())
-    async with make_worker(settings.model_copy(update={"claim_idle_ms": 0, "max_deliveries": 1})) as w:
-        await rdb.xreadgroup("writers", "dead-worker", {"posts:stream": ">"}, count=10)  # 1회 전달
-        assert await w.reclaim_posts_once() == 1  # reclaim 으로 2회째 → 한도 초과
-    assert await fetch_posts(engine) == []
-    assert await rdb.xlen("posts:dlq") == 1
-    assert (await client.get(f"/api/board/posts/{post_id}")).json() == {"status": "failed"}
+    async with make_worker(settings.model_copy(update={"claim_idle_ms": 0})) as w:
+        (_, [(mid, _)]), = await rdb.xreadgroup("writers", "dead-worker", {"posts:stream": ">"}, count=10)
+        for _ in range(10):  # 장애 중 reclaim 이 반복된 상황
+            await rdb.xclaim("posts:stream", "writers", "dead-worker", 0, [mid])
+        assert await w.reclaim_posts_once() == 1
+    assert [str(r["id"]) for r in await fetch_posts(engine)] == [post_id]
+    assert await rdb.xlen("posts:dlq") == 0
+    assert await rdb.xlen("posts:stream") == 0
+    assert (await client.get(f"/api/board/posts/{post_id}")).json()["status"] == "published"
 
 
 async def test_reclaim_does_not_dead_letter_during_db_outage(make_worker, settings, rdb):
     await enqueue(rdb, settings, new_user_id())
-    broken = settings.model_copy(update={"database_url": BROKEN_DATABASE_URL, "claim_idle_ms": 0, "max_deliveries": 1})
+    broken = settings.model_copy(update={"database_url": BROKEN_DATABASE_URL, "claim_idle_ms": 0})
     async with make_worker(broken) as w:
         await rdb.xreadgroup("writers", "dead-worker", {"posts:stream": ">"}, count=10)
         with pytest.raises(TransientDbError):
@@ -145,3 +167,21 @@ async def test_successful_save_clears_stale_failed_marker(worker, settings, rdb)
     await rdb.set(f"failed:{post_id}", "1")
     assert await worker.process_posts_once() == 1
     assert await rdb.exists(f"failed:{post_id}") == 0
+
+
+async def test_post_from_deleted_user_is_stored_anonymized(worker, settings, rdb, engine):
+    """탈퇴 이벤트가 큐에 남은 글보다 먼저 처리되어도 그 글은 익명으로 저장되어야 한다."""
+    leaving, staying = new_user_id(), new_user_id()
+    await enqueue(rdb, settings, leaving, title="탈퇴 전 글")
+    await enqueue(rdb, settings, staying, title="남는 글")
+    await rdb.xadd("user:events", {"type": "user_deleted", "user_id": leaving})
+
+    assert await worker.process_user_events_once() == 1
+    assert 0 < await rdb.ttl(f"deleted_user:{leaving}") <= 7200
+    assert await worker.process_posts_once() == 2
+
+    rows = {r["title"]: r for r in await fetch_posts(engine)}
+    assert rows["탈퇴 전 글"]["author_id"] is None
+    assert rows["탈퇴 전 글"]["author_nickname"] == "탈퇴한 사용자"
+    assert str(rows["남는 글"]["author_id"]) == staying
+    assert rows["남는 글"]["author_nickname"] == "tester"

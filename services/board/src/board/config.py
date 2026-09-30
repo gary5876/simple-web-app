@@ -17,6 +17,5 @@ class Settings(BaseSettings):
     worker_batch_size: int = 100
     worker_block_ms: int = 1000
     claim_idle_ms: int = 30000
-    max_deliveries: int = 5
     heartbeat_path: str = "/tmp/worker-heartbeat"
     worker_metrics_port: int = 9100

@@ -12,7 +12,8 @@ def make_engine(url: str) -> AsyncEngine:
         max_overflow=5,
         pool_pre_ping=True,
         pool_timeout=5,
-        connect_args={"timeout": 2},
+        # timeout: 연결 수립 제한, command_timeout: 쿼리 하나의 실행 제한(초과 시 TimeoutError → 503/재시도).
+        connect_args={"timeout": 2, "command_timeout": 5},
     )
 
 

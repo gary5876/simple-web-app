@@ -27,3 +27,8 @@ def failed(post_id: str) -> str:
 
 def post_cache(post_id: str) -> str:
     return f"cache:post:{post_id}"
+
+
+def deleted_user(user_id: str) -> str:
+    """탈퇴한 사용자 표시. 큐에 남아 있던 그 사용자의 글을 저장할 때 익명으로 바꾸는 데 쓴다."""
+    return f"deleted_user:{user_id}"

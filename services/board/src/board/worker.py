@@ -13,7 +13,6 @@ from pathlib import Path
 from prometheus_client import start_http_server
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError
-from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -21,8 +20,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from board import cache, keys, posts_repo
 from board.config import Settings
 from board.infra import make_engine, make_redis
-from board.metrics import refresh_queue_metrics
 from board.observability import configure_logging
+from board.worker_metrics import refresh_queue_metrics
 
 log = logging.getLogger("board.worker")
 
@@ -31,6 +30,8 @@ RECLAIM_INTERVAL_SECONDS = 10
 METRICS_INTERVAL_SECONDS = 5
 INITIAL_BACKOFF_SECONDS = 0.5
 MAX_BACKOFF_SECONDS = 5.0
+# 탈퇴 표시 유지 시간. 큐에 남은 글이 이 안에 처리된다고 본다 (status_ttl 보다 넉넉하게).
+DELETED_USER_TTL_SECONDS = 7200
 
 
 class TransientDbError(Exception):
@@ -122,37 +123,11 @@ class Worker:
             count=self.settings.worker_batch_size,
         )
         claimed: list[Entry] = [(mid, fields) for mid, fields in result[1] if fields]
-        if not claimed:
-            return 0
-        counts = {mid: await self._deliveries(mid) for mid, _ in claimed}
-        if any(n > self.settings.max_deliveries for n in counts.values()):
-            # DB 장애 중에는 전달 횟수가 쌓여도 DLQ 로 보내지 않는다.
-            await self._probe_db()
-        retry: list[Entry] = []
-        for mid, fields in claimed:
-            deliveries = counts[mid]
-            if deliveries > self.settings.max_deliveries:
-                await self.dead_letter(mid, fields, f"delivered {deliveries} times")
-            else:
-                retry.append((mid, fields))
-        if retry:
-            await self._persist_posts(retry)
+        # 전달 횟수로 DLQ 에 보내지 않는다. 긴 DB 장애 뒤에는 정상 글도 횟수가 쌓인다.
+        # 저장할 수 없는 글은 _persist_posts 의 poison 경로(디코딩/DB 거부)로 DLQ 에 간다.
+        if claimed:
+            await self._persist_posts(claimed)
         return len(claimed)
-
-    async def _deliveries(self, message_id: str) -> int:
-        info = await self.redis.xpending_range(
-            keys.POSTS_STREAM, keys.POSTS_GROUP, min=message_id, max=message_id, count=1
-        )
-        return info[0]["times_delivered"] if info else 0
-
-    async def _probe_db(self) -> None:
-        try:
-            async with self.engine.connect() as conn:
-                await conn.execute(text("SELECT 1"))
-        except Exception as exc:
-            if is_transient(exc):
-                raise TransientDbError(repr(exc)) from exc
-            raise
 
     async def _persist_posts(self, entries: list[Entry]) -> None:
         decoded: list[tuple[str, dict[str, str], dict]] = []
@@ -165,6 +140,7 @@ class Worker:
 
         stored: list[tuple[str, dict[str, str], dict]] = []
         if decoded:
+            await self._anonymize_deleted_authors([row for _, _, row in decoded])
             try:
                 await self._insert([row for _, _, row in decoded])
                 stored = decoded
@@ -186,6 +162,19 @@ class Worker:
             await self._ack_posts([(mid, str(row["id"])) for mid, _, row in stored])
         for mid, fields, reason in poison:
             await self.dead_letter(mid, fields, reason)
+
+    async def _anonymize_deleted_authors(self, rows: list[dict]) -> None:
+        """탈퇴 이벤트가 먼저 처리된 사용자의 글은 익명으로 저장한다.
+
+        Redis 조회 실패는 그대로 올린다. 배치는 _inflight 에 남아 다음 반복에서 다시 시도된다.
+        """
+        author_ids = sorted({str(row["author_id"]) for row in rows})
+        markers = await self.redis.mget([keys.deleted_user(a) for a in author_ids])
+        deleted = {a for a, marker in zip(author_ids, markers, strict=True) if marker}
+        for row in rows:
+            if str(row["author_id"]) in deleted:
+                row["author_id"] = None
+                row["author_nickname"] = posts_repo.ANONYMIZED_NICKNAME
 
     async def _insert(self, rows: list[dict]) -> None:
         try:
@@ -251,6 +240,8 @@ class Worker:
             except (KeyError, ValueError):
                 log.error("dropping invalid user event", extra={"extra_fields": {"message_id": message_id}})
             else:
+                # 먼저 표시를 남겨서, 큐에 아직 남은 이 사용자의 글도 저장 시 익명으로 바뀌게 한다.
+                await self.redis.set(keys.deleted_user(user_id), "1", ex=DELETED_USER_TTL_SECONDS)
                 # DB 오류는 그대로 올려서 ACK 하지 않는다. 익명화는 멱등이라 reclaim 으로 다시 처리하면 된다.
                 post_ids = await posts_repo.anonymize_author(self.engine, user_id)
                 await cache.invalidate(self.redis, *post_ids)
@@ -268,6 +259,14 @@ class Worker:
         while not stop.is_set():
             # DB/Redis 장애 중에도 heartbeat 를 갱신한다. 의존성 장애로 Pod 가 재시작되면 안 된다.
             heartbeat.touch()
+            # 큐 지표는 DB 장애 중에도 갱신되어야 한다 (장애 중 큐가 쌓이는 것을 봐야 한다).
+            now = time.monotonic()
+            if now - last_metrics >= METRICS_INTERVAL_SECONDS:
+                try:
+                    await refresh_queue_metrics(self.redis)
+                    last_metrics = now
+                except Exception as exc:
+                    log.warning("queue metrics refresh failed", extra={"extra_fields": {"error": repr(exc)}})
             try:
                 if not groups_ready:
                     await self.ensure_groups()
@@ -279,9 +278,6 @@ class Worker:
                     await self.reclaim_posts_once()
                     await self.reclaim_user_events_once()
                     last_reclaim = now
-                if now - last_metrics >= METRICS_INTERVAL_SECONDS:
-                    await refresh_queue_metrics(self.redis)
-                    last_metrics = now
                 backoff = INITIAL_BACKOFF_SECONDS
             except Exception as exc:
                 if isinstance(exc, ResponseError) and "NOGROUP" in str(exc):

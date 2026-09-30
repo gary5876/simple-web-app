@@ -1,12 +1,14 @@
 import asyncio
 import os
+import subprocess
+import sys
 import time
 
 from prometheus_client import REGISTRY
 
-from board.metrics import refresh_queue_metrics
+from board.worker_metrics import QUEUE_LENGTH, refresh_queue_metrics
 from board.worker_health import is_healthy
-from helpers import enqueue, fetch_posts, insert_posts, make_row, new_user_id, post_headers
+from helpers import BROKEN_DATABASE_URL, enqueue, fetch_posts, insert_posts, make_row, new_user_id, post_headers
 
 
 async def test_user_deleted_event_anonymizes_posts(client, worker, engine, rdb):
@@ -88,6 +90,36 @@ async def test_queue_metrics(rdb, settings):
     assert REGISTRY.get_sample_value("queue_length") == 3
     assert REGISTRY.get_sample_value("queue_lag_seconds") >= 0
     assert REGISTRY.get_sample_value("dlq_size") == 1
+
+
+async def test_run_loop_refreshes_queue_metrics_during_db_outage(make_worker, settings, rdb):
+    uid = new_user_id()
+    for _ in range(4):
+        await enqueue(rdb, settings, uid)
+    QUEUE_LENGTH.set(0)
+    async with make_worker(settings.model_copy(update={"database_url": BROKEN_DATABASE_URL})) as w:
+        stop = asyncio.Event()
+        task = asyncio.create_task(w.run(stop))
+        for _ in range(30):
+            if REGISTRY.get_sample_value("queue_length") == 4:
+                break
+            await asyncio.sleep(0.1)
+        stop.set()
+        await asyncio.wait_for(task, timeout=6)
+    assert REGISTRY.get_sample_value("queue_length") == 4
+
+
+def test_queue_gauges_are_not_registered_by_api_process():
+    code = (
+        "import board.app, board.routes, board.cache, board.metrics\n"
+        "from prometheus_client import REGISTRY, generate_latest\n"
+        "text = generate_latest(REGISTRY).decode()\n"
+        "assert 'cache_hit_ratio' in text, text\n"
+        "for name in ('queue_length', 'queue_lag_seconds', 'dlq_size'):\n"
+        "    assert name not in text, name\n"
+    )
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
 
 
 def test_worker_health(tmp_path):
