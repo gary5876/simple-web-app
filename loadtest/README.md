@@ -1,6 +1,61 @@
 # 부하 테스트 (k6 disaster)
 
-## 로컬 실행 결과
+## 시나리오 버전
+
+| 버전 | 모양 | 위치 |
+|---|---|---|
+| `disaster-v1` | 평상시 → 30초 만에 20배 → 5분 유지 → 감소 → 두 번째 폭증 (약 14분) | git 태그 `loadtest-disaster-v1` |
+| `disaster-v2` (현재) | 토스증권 미국 정규장 개장 모양. 아래 참고 (약 19분) | `loadtest/disaster.js` |
+
+v1을 다시 돌리려면 `git show loadtest-disaster-v1:loadtest/disaster.js > /tmp/disaster-v1.js`로 꺼내서
+`loadtest/` 안에 두고 실행한다(`lib.js`를 상대 경로로 가져오기 때문).
+
+### v2: 개장 모양
+
+[토스증권 해외주식 안정화 글](https://toss.tech/article/28738)에 나온 개장 상황을 본떴다.
+
+| 원문 | v2에서 |
+|---|---|
+| 22:30 정규장 개장 직후 주문 호출이 급격히 증가, 평소의 20배 이상 | 장전 2분(BASELINE) 뒤 **10초 만에 PEAK(BASELINE x 20)** |
+| 운영 이슈 대부분이 개장 초반에 발생 | 개장 초반 5분(`open`)을 따로 집계 |
+| 급증이 최소 2시간 지속 | 개장 지속 10분(`hold`). 2시간을 재현하지 않고 안정 상태에 들어가는지만 본다(아래 참고) |
+| 개장 직후 예약 주문 100만 건 이상을 배치로 전송 | 개장 순간 사용자마다 예약 쓰기 4건(`reserved`, 기본 500명 x 4 = 2,000건)을 최대한 빨리 넣음 |
+
+- 예약 쓰기 4건은 nginx의 세션당 순간 허용치(5건)보다 하나 적은 값이다. 같은 순간 실시간 쓰기가 같은 사용자로 들어와도 429가 나지 않게 한다.
+- 실시간 트래픽과 예약 쓰기가 같은 순간에 겹친다. 큐에 쌓인 쓰기를 worker가 소화하는 동안 실시간 요청이 계속 들어오는 상황이다.
+- 원문의 브로커 TPS 제한, 장애 감지, 브로커 전환은 본뜨지 않았다(서버 코드는 그대로).
+
+### 2시간을 그대로 돌리지 않는 이유
+
+같은 부하를 유지하면 보통 10분 안팎에 안정 상태에 들어간다(HPA가 Pod 수를 정하고, 캐시가 데워지고, 큐 길이가 일정해짐).
+그 뒤로 같은 부하를 더 유지해서 새로 드러나는 것은 시간에 따라 쌓이는 값뿐이다. 이런 값은 일정한 속도로 늘거나
+TTL에서 멈추므로, 2시간을 기다리지 않고 기울기와 "속도 x 시간"으로 판단한다.
+
+| 쌓이는 것 | 설정 | PEAK 400 rps에서 2시간 뒤 | 판단 방법 |
+|---|---|---|---|
+| 글쓰기 큐 적체 | 상한 50,000건 | worker 처리가 유입보다 느리면 계속 증가 | `hold` 구간 기울기. 상한까지 남은 시간 = 50,000 / (유입 - 처리) |
+| 멱등 키 (Redis) | TTL 10분 | 10분 뒤 약 36,000개에서 멈춤 | 계산 |
+| 글 상태 키 (Redis) | TTL 1시간 | 1시간 뒤 약 216,000개에서 멈춤 | 계산 |
+| 세션 (Redis) | TTL 1일 | 멈추지 않고 약 144,000개 | 계산 |
+| 게시글 (DB) | 지우지 않음 | 약 432,000건 | 계산 |
+| Pod 메모리, 커넥션 | | 누수가 있으면 계속 증가 | `hold` 구간 기울기 |
+
+쓰기 15%(초당 60건), 로그인 5%(초당 20건) 기준이다. TTL은 `services/board/src/board/config.py`, `services/auth/src/auth/config.py` 값이다.
+실제 개장 후 2시간은 최고치가 그대로 유지되지 않고 서서히 줄어들므로, 2시간 내내 PEAK를 유지하는 건 현실보다 가혹한 가정이다.
+그래도 장시간 테스트가 필요하면 `HOLD=2h`로 가끔 돌린다.
+
+### 결과가 버전끼리 섞이지 않게 하는 방법
+
+- 버전 이름은 `disaster.js`의 `SCENARIO_ID` 한 곳에만 있다. 시나리오 모양을 바꾸면 이 값을 올리고, 바꾸기 전 커밋에 `loadtest-disaster-<옛 버전>` 태그를 붙인다.
+- 모든 메트릭에 `test:<버전>` 태그가 붙는다.
+- Make 타깃은 결과를 `loadtest/results/<버전>/<날짜-시각>-<모드>/`에 남긴다. 모드는 `full`, `quick`, `local`이다.
+  - `summary.json`: k6 요약 전체
+  - `meta.json`: 버전, 모드, 사용자 수, 구간 길이, 요청 비율 등 실행 조건
+- `k6 run`을 직접 부르면 `OUT`을 주지 않는 한 파일을 남기지 않는다.
+
+## v1 로컬 실행 결과
+
+아래는 **v1 시나리오**로 측정한 값이다. v2와 직접 비교할 수 없다.
 
 로컬 kind 클러스터(Docker 6 CPU / 3.8GiB)에서는 임계치를 **충족하지 못했다.** 가장 가능성이 높은 원인은
 노드 포화(control plane + ~20개 Pod + k6가 6 vCPU를 나눠 씀)다. 다만 이것만 따로 떼어 검증하지는 못했다
@@ -21,7 +76,7 @@
 - verify 분리: `auth-verify` Deployment (argon2 트래픽과 분리)
 - 로컬 오버레이(`local-loadtest`)에서 HPA 상한 제한 (auth 4, auth-verify 4, board-api 6, nginx 4, worker 4)
 - probe 강화: liveness timeout 5s x 6회, readiness timeout 3s (CPU 기아 때 재시작 폭주 방지)
-- argon2 `parallelism=1` (해시당 스레드 1개; 기존 p=4 해시도 검증됨)
+- argon2 `parallelism=1` (해시당 스레드 1개, 기존 p=4로 만든 해시도 그대로 검증됨)
 - `PROFILE=local` 축소 프로필, `PEAK` 덮어쓰기
 
 이 수정 이후에는 부하를 다시 돌려 보지 않았다(노트북 자원 문제). **임계치는 클라우드(EKS/GKE) 목표값이며,
@@ -34,7 +89,7 @@
 | 리밋 | base (클라우드) | local-loadtest |
 |---|---|---|
 | 읽기 (`RATE_READ` / `BURST_READ`, IP별) | 100r/s / 200 | **10000r/s / 20000** |
-| 로그인·가입 (`RATE_LOGIN` / `BURST_LOGIN`, IP별) | 30r/m / 10 | **6000r/m / 1000** |
+| 로그인, 가입 (`RATE_LOGIN` / `BURST_LOGIN`, IP별) | 30r/m / 10 | **6000r/m / 1000** |
 | 글쓰기 (`RATE_WRITE` / `BURST_WRITE`, 세션 쿠키 sid별) | 2r/s / 5 | 그대로 (2r/s / 5) |
 
 - 로그인 값은 `auth_sensitive` 존(`DELETE /api/auth/me`)에도 그대로 적용된다.
@@ -44,21 +99,28 @@
 
 ## 사용법
 
-환경 변수 (`k6 run -e 이름=값`, Make 타깃은 `USERS`/`PEAK`를 그대로 넘긴다):
+환경 변수 (`k6 run -e 이름=값`. Make 타깃은 아래 변수를 `make loadtest HOLD=1h`처럼 그대로 넘긴다):
 
 | 변수 | 기본값 | 설명 |
 |---|---|---|
 | `BASE_URL` | `http://localhost:8080` | 대상 주소 |
-| `USERS` | 500 (QUICK 20, local 60) | setup에서 가입·로그인할 사용자 수 |
-| `BASELINE` | 20 (QUICK 5, local 4) | 평상시 초당 요청 수 |
-| `PEAK` | `BASELINE` x 20 | 폭증 구간 초당 요청 수 |
-| `QUICK` | 없음 | `1`이면 각 단계를 10초로 줄임(약 1분 30초) |
+| `USERS` | 500 (QUICK 20, local 60) | setup에서 가입하고 로그인할 사용자 수 |
+| `BASELINE` | 20 (QUICK 5, local 4) | 장전 초당 요청 수 |
+| `PEAK` | `BASELINE` x 20 | 개장 후 초당 요청 수 |
+| `MIX` | `80,15,5` | 읽기, 쓰기, 로그인 비율(%). 쓰기 비중을 올리려면 `60,35,5` 등 |
+| `PRE`, `RAMP`, `OPEN`, `HOLD`, `COOL` | `2m`, `10s`, `5m`, `10m`, `2m` | 장전, 개장 급증, 개장 초반, 개장 지속, 진정 구간 길이 |
+| `RESERVED` | 4 | 개장 순간 사용자마다 넣는 예약 쓰기 수. 5를 넘기면 429가 난다 |
+| `QUICK` | 없음 | `1`이면 모든 구간을 10초로 줄임(구간 길이 변수는 무시, 약 1분) |
 | `PROFILE` | 없음 | `local`이면 노트북용 축소 기본값 사용 |
+| `OUT` | 없음 | 결과 폴더. Make 타깃이 버전별 폴더를 만들어 넘긴다 |
 
 임계치 (완화하지 않음, 실패 시 k6 종료 코드 99):
 - `read_duration` p(95) < 300ms
 - `write_accepted_duration` p(95) < 100ms
 - `server_errors` rate < 1%
+
+구간별 수치: 요약에 `{ phase:pre }`, `surge`, `open`, `hold`, `cool`, `reserved`로 나뉘어 나온다.
+판정은 전체 기준으로만 하고, 구간별 값은 "개장 초반이 먼저 무너지는지" 보는 용도다.
 
 커스텀 메트릭:
 - `read_duration` (Trend): 200 응답 읽기(`GET /api/board/posts`, 다음 페이지 포함) 시간
@@ -70,10 +132,14 @@
 ## 실행 방법
 
 ```
-make loadtest                 # 전체 시나리오 (클라우드/큰 머신용)
-make loadtest-quick           # 약 1분 30초, 동작 확인용
-make loadtest-local PEAK=40   # 노트북용 축소판, PEAK/USERS 조절 (세 타깃 모두 지원)
+make loadtest                 # 전체 시나리오, 약 19분 (클라우드/큰 머신용)
+make loadtest HOLD=2h         # 장시간 테스트, 가끔만 ("2시간을 그대로 돌리지 않는 이유" 참고)
+make loadtest-quick           # 구간마다 10초, 약 1분, 동작 확인용
+make loadtest-local PEAK=40   # 노트북용 축소판, 환경 변수 조절은 세 타깃 모두 지원
 ```
+
+docker compose(`make dev`)에서 동작만 확인할 때는 `make loadtest-quick USERS=4 PEAK=10`처럼 작게 돌린다.
+compose의 nginx는 로그인과 가입 리밋(30r/m, burst 10)이 그대로라 사용자를 많이 만들면 setup에서 429가 난다.
 
 로컬에서는 먼저 `make k8s-local-loadtest`로 클러스터를 띄운다. Docker에 **최소 8GiB 메모리**(가능하면 CPU도 더)가 필요하다.
 
@@ -88,7 +154,7 @@ k6가 본 시간
  └ nginx rt                               (nginx perf 로그)
     ├ verify(vt) = verify 대기 + verify 앱  (auth_request /_verify)
     ├ upstream(urt) = 앱 앞 대기 + 앱 시간     (board-api 또는 auth)
-    │    앱 시간 = redis + db(풀·연결 + 쿼리) + argon2 대기 + argon2 계산 + 나머지(파이썬 CPU)
+    │    앱 시간 = redis + db(풀, 연결 + 쿼리) + argon2 대기 + argon2 계산 + 나머지(파이썬 CPU)
     └ nginx 자체
 ```
 
@@ -147,7 +213,7 @@ HPA가 Pod 수를 바꾸면 단계끼리 비교가 어려워진다. 처리시간
 ### 표 읽기
 
 - **2. 평균 분해**: 부하를 올릴 때 어느 칸이 먼저 커지는지 본다. 처리시간(redis, db 쿼리, 앱 나머지)은 거의 그대로이고
-  대기 칸(앱 앞 대기, db 풀·연결, argon2 대기)이 커지면 그 자원이 포화된 것이다.
+  대기 칸(앱 앞 대기, db 풀, 연결, argon2 대기)이 커지면 그 자원이 포화된 것이다.
 - **4. 활용 법칙**: `요청당 CPU = 사용 코어 / 처리량`. 낮은 부하에서 구한 값이 곧 요청 하나의 CPU 비용이고,
   `필요 코어 = 목표 rps x 요청당 CPU`로 목표 부하에 필요한 Pod 수를 추정할 수 있다.
 - **5. 노드 메모리**: PSI(메모리 압박)와 swap-in, major fault가 0보다 커지는 단계에서 모든 칸이 함께 느려지면 메모리 부족이다.

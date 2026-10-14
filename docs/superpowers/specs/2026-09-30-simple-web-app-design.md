@@ -16,7 +16,7 @@
 
 ### 범위 밖
 - 댓글, 수정, 좋아요, 검색, 파일 업로드
-- 클러스터·노드·매니지드 DB·LB·DNS·Prometheus 설치 등 인프라 프로비저닝 (`one-click-deploy-k8s` 담당)
+- 클러스터, 노드, 매니지드 DB, LB, DNS, Prometheus 설치 등 인프라 프로비저닝 (`one-click-deploy-k8s` 담당)
 
 ### 설계 원칙
 1. **앱 Pod는 상태를 갖지 않는다.** 세션은 Redis, 데이터는 PostgreSQL에 두고, Pod는 언제든 죽거나 늘어날 수 있다.
@@ -61,7 +61,7 @@ simple-web-app/
   db/migrations/       SQL 마이그레이션 파일
   k8s/
     base/              Deployment, Service, HPA, PDB, NetworkPolicy, ConfigMap, Job
-    overlays/local/    postgres·redis StatefulSet, Secret 직접 생성, NodePort/Ingress
+    overlays/local/    postgres, redis StatefulSet, Secret 직접 생성, NodePort/Ingress
     overlays/aws/      ECR 이미지, ALB Ingress, Terraform이 만든 Secret 참조, LB 대역
     overlays/gcp/      Artifact Registry 이미지, GCE Ingress, Terraform이 만든 Secret 참조, LB 대역
   loadtest/            k6 재난 시나리오
@@ -74,9 +74,9 @@ simple-web-app/
 nginx `auth_request` 게이트웨이 방식을 쓴다. board-api는 인증 로직을 모르고, nginx가 넘겨준 헤더만 믿는다.
 
 ### API
-| 메서드 · 경로 | 설명 |
+| 메서드, 경로 | 설명 |
 |---|---|
-| `POST /api/auth/signup` `{email, password, nickname}` | argon2 해시(스레드풀에서 실행, 이벤트 루프가 막히지 않게) → `auth.users` INSERT → 201. 이메일·닉네임 중복 시 409 |
+| `POST /api/auth/signup` `{email, password, nickname}` | argon2 해시(스레드풀에서 실행, 이벤트 루프가 막히지 않게) → `auth.users` INSERT → 201. 이메일, 닉네임 중복 시 409 |
 | `POST /api/auth/login` `{email, password}` | 해시 검증 → `sid = secrets.token_urlsafe(32)` → Redis `SET session:<sid> {user_id, nickname} EX 86400`, `SADD user_sessions:<user_id> <sid>` → `Set-Cookie: sid=<sid>; HttpOnly; Secure; SameSite=Lax; Path=/` |
 | `POST /api/auth/logout` | `DEL session:<sid>`, `SREM user_sessions:<user_id> <sid>` → 쿠키 만료 → 204 |
 | `GET /api/auth/me` | 세션이 있으면 `{user_id, email, nickname}`, 없으면 401 |
@@ -92,7 +92,7 @@ nginx `auth_request` 게이트웨이 방식을 쓴다. board-api는 인증 로�
 4. `XADD user:events {type: "user_deleted", user_id}`를 발행한다.
 5. 쿠키를 만료시키고 204를 반환한다.
 
-board-worker가 `user:events`를 받으면 해당 사용자의 posts를 `author_id = NULL`, `author_nickname = '탈퇴한 사용자'`로 **익명화해서 유지**하고, 목록·상세 캐시를 무효화한다. 재난 상황에서 올라온 정보성 글이 사라지지 않게 하기 위함이다.
+board-worker가 `user:events`를 받으면 해당 사용자의 posts를 `author_id = NULL`, `author_nickname = '탈퇴한 사용자'`로 **익명화해서 유지**하고, 목록, 상세 캐시를 무효화한다. 재난 상황에서 올라온 정보성 글이 사라지지 않게 하기 위함이다.
 
 ### 헤더 위조 방지
 - nginx는 클라이언트가 보낸 `X-User-Id`, `X-User-Nickname` 헤더를 항상 지우고, `auth_request` 결과로만 다시 채운다.
@@ -102,7 +102,7 @@ board-worker가 `user:events`를 받으면 해당 사용자의 posts를 `author_
 ## 4. 게시판 (board-api, board-worker)
 
 ### API
-| 메서드 · 경로 | 설명 |
+| 메서드, 경로 | 설명 |
 |---|---|
 | `GET /api/board/posts?cursor=<post_id>&limit=20` | 커서 페이지네이션(`id < cursor ORDER BY id DESC`). 응답 `{items, next_cursor}` |
 | `GET /api/board/posts/{id}` | DB에 있으면 `{status: "published", post}`. 없고 Redis `pending:<id>`가 있으면 `{status: "pending"}`. Redis `failed:<id>`가 있으면 `{status: "failed"}`. 모두 없으면 404 |
@@ -137,7 +137,7 @@ POST /api/board/posts
 
 ### 캐시 읽기
 - 목록 첫 페이지(cursor 없음)는 Redis `cache:posts:first`에 **TTL 3초**로 저장한다. 두 번째 페이지부터는 DB를 직접 조회한다(인덱스를 타는 PK 범위 조회라 부담이 적다).
-- 상세는 `cache:post:<id>`에 TTL 30초로 저장한다. 삭제·익명화 시 삭제한다.
+- 상세는 `cache:post:<id>`에 TTL 30초로 저장한다. 삭제, 익명화 시 삭제한다.
 - **캐시 스탬피드 방지**: 캐시가 비었으면 `SET lock:posts:first 1 NX EX 2`를 잡은 요청 하나만 DB를 조회해서 캐시를 채운다. 락을 못 잡은 요청은 50ms 간격으로 최대 5번 캐시를 다시 확인하고, 그래도 없으면 DB를 직접 조회한다.
 - **만료된 캐시 활용**: 캐시 값을 저장할 때 TTL 60초짜리 사본 `stale:posts:first`도 함께 저장한다. DB 조회가 실패하면 이 사본을 반환한다.
 
@@ -208,8 +208,8 @@ CREATE INDEX posts_author_idx ON board.posts (author_id);
 ### 의존성 장애 시 동작
 | 장애 | auth-svc | board-api 읽기 | board-api 쓰기 |
 |---|---|---|---|
-| Redis 장애 | 로그인·로그아웃·탈퇴 503. verify는 `X-Auth-Degraded: 1`로 응답 | 익명으로 처리, 캐시를 건너뛰고 DB 직접 조회 | 503 (`X-Auth-Degraded` 또는 큐 쓰기 실패) |
-| DB 장애 | 가입·로그인·탈퇴 503, 기존 세션 verify는 정상 | 만료된 캐시(stale) 반환, 없으면 503 | 정상 (큐에 쌓였다가 DB 복구 후 처리) |
+| Redis 장애 | 로그인, 로그아웃, 탈퇴 503. verify는 `X-Auth-Degraded: 1`로 응답 | 익명으로 처리, 캐시를 건너뛰고 DB 직접 조회 | 503 (`X-Auth-Degraded` 또는 큐 쓰기 실패) |
+| DB 장애 | 가입, 로그인, 탈퇴 503, 기존 세션 verify는 정상 | 만료된 캐시(stale) 반환, 없으면 503 | 정상 (큐에 쌓였다가 DB 복구 후 처리) |
 
 ## 7. k8s 구성
 
@@ -266,8 +266,8 @@ CREATE INDEX posts_author_idx ON board.posts (author_id);
 | 대상 | 키 | 기본값 |
 |---|---|---|
 | 읽기 (`GET /api/board/*`) | 클라이언트 IP | 100r/s, burst 200 |
-| 글쓰기·삭제 | `X-User-Id` (auth_request 결과). 키가 비어 있는 익명 요청은 리밋에 집계되지 않고 board-api가 401로 거절 | 2r/s, burst 5 |
-| 로그인·회원가입 (IP 기준) | 클라이언트 IP | 30r/m, burst 10 |
+| 글쓰기, 삭제 | `X-User-Id` (auth_request 결과). 키가 비어 있는 익명 요청은 리밋에 집계되지 않고 board-api가 401로 거절 | 2r/s, burst 5 |
+| 로그인, 회원가입 (IP 기준) | 클라이언트 IP | 30r/m, burst 10 |
 | 로그인 (계정 기준) | 이메일, auth-svc가 Redis 카운터로 처리 | 15분에 실패 10회 초과 시 429 |
 
 - 한도를 넘으면 JSON 에러 본문과 `Retry-After`를 포함한 429를 반환한다.
@@ -283,7 +283,7 @@ CREATE INDEX posts_author_idx ON board.posts (author_id);
 ## 9. 관측
 - 모든 서비스는 `X-Request-ID`를 포함한 JSON 구조화 로그를 stdout으로 남긴다.
 - 각 서비스는 `/metrics`(Prometheus 형식)를 노출한다. 기본 HTTP 지표에 더해 `queue_length`, `queue_lag_seconds`, `dlq_size`, `cache_hit_ratio`를 추가한다. `/metrics`는 nginx를 통해 외부로 노출하지 않는다.
-- Prometheus·Grafana 설치는 인프라 프로젝트 담당이다.
+- Prometheus, Grafana 설치는 인프라 프로젝트 담당이다.
 
 ## 10. 테스트
 - **백엔드**: pytest + httpx AsyncClient. Postgres와 Redis는 testcontainers로 실제 인스턴스를 띄워 테스트한다(mock 사용 안 함).
@@ -291,7 +291,7 @@ CREATE INDEX posts_author_idx ON board.posts (author_id);
   - board: 글쓰기 202 → 워커가 한 번 처리 → 목록에 나타남, 멱등 키, 큐 상한 도달 시 503, DLQ 이동, 본인 글만 삭제, 탈퇴 사용자 익명화, 커서 페이지네이션, 캐시 무효화
   - 장애 시나리오: Redis를 끊었을 때 읽기가 DB로 가는지, DB를 끊었을 때 쓰기가 큐로 가고 읽기가 stale 캐시를 반환하는지, readiness 판정
 - **nginx 통합 테스트** (docker-compose 환경): 클라이언트가 보낸 `X-User-Id` 제거, `/_verify`와 `/internal/*` 외부 접근 시 404, 리밋 초과 시 429, SPA fallback
-- **프론트**: vitest로 API 클라이언트(재시도·백오프·멱등 키)와 낙관적 업데이트 로직을 테스트한다. Playwright 스모크 테스트 1개: 회원가입 → 글쓰기 → 목록 확인 → 탈퇴.
+- **프론트**: vitest로 API 클라이언트(재시도, 백오프, 멱등 키)와 낙관적 업데이트 로직을 테스트한다. Playwright 스모크 테스트 1개: 회원가입 → 글쓰기 → 목록 확인 → 탈퇴.
 - **k8s**: `kustomize build k8s/overlays/{local,aws,gcp} | kubeconform -strict`.
 
 ## 11. 실행 방법
@@ -303,9 +303,11 @@ CREATE INDEX posts_author_idx ON board.posts (author_id);
 | `make k8s-local` | kind 클러스터 생성 → 이미지 로드 → `kubectl apply -k k8s/overlays/local` |
 | `make loadtest` | k6 재난 시나리오 실행 |
 
-### k6 재난 시나리오
-- 평상시 트래픽 → **30초 만에 20배 폭증** → 5분 유지 → 감소 → 두 번째 폭증
+### k6 재난 시나리오 (v2, 2026-10-14 변경)
+- 토스증권 미국 정규장 개장 모양을 본뜬다([참고 글](https://toss.tech/article/28738)): 장전 2분 → **10초 만에 20배 급증** → 개장 초반 5분 → 개장 지속 10분 → 진정 2분. 개장 지속 구간은 원문의 2시간을 재현하지 않고 안정 상태에 들어가는지만 본다(시간에 따라 쌓이는 값은 기울기와 계산으로 판단).
+- 개장 순간 예약 쓰기(사용자마다 4건)를 한꺼번에 넣는다. 예약 주문 일괄 전송에 해당한다.
 - 요청 비율: 읽기 80%, 쓰기 15%, 로그인 5%
+- v1(평상시 → 30초 만에 20배 → 5분 유지 → 감소 → 두 번째 폭증)은 git 태그 `loadtest-disaster-v1`에 남아 있다. 결과는 `loadtest/results/<버전>/`로 나눠 저장해 버전끼리 섞이지 않게 한다.
 - 통과 기준: 읽기 p95 < 300ms, 쓰기 202 응답 p95 < 100ms, 5xx 비율 < 1% (백프레셔 503은 따로 집계)
 - 테스트 중 `kubectl get hpa -w`로 Pod 확장을 관찰한다.
 
@@ -316,4 +318,4 @@ CREATE INDEX posts_author_idx ON board.posts (author_id);
 - Ingress 컨트롤러(ALB / GCE)와 LB 대역(nginx `set_real_ip_from`용)
 - (선택) KEDA, metrics-server(HPA 필수), Prometheus
 
-배포 순서: 이미지 빌드·푸시 → Secret 준비 → `db-migrate` Job 완료 대기 → `kubectl apply -k k8s/overlays/<cloud>`.
+배포 순서: 이미지 빌드, 푸시 → Secret 준비 → `db-migrate` Job 완료 대기 → `kubectl apply -k k8s/overlays/<cloud>`.

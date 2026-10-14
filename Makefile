@@ -66,7 +66,7 @@ APP_DEPLOYMENTS := nginx auth auth-verify board-api board-worker
 LOCAL_IMAGES := simple-web-app/auth:dev simple-web-app/board:dev simple-web-app/frontend:dev
 
 .PHONY: k8s-local k8s-smoke k8s-down
-k8s-local: ## kind 클러스터 생성 → 이미지 빌드·로드 → overlay 적용 → 마이그레이션·롤아웃 대기
+k8s-local: ## kind 클러스터 생성 → 이미지 빌드, 로드 → overlay 적용 → 마이그레이션, 롤아웃 대기
 	@kind get clusters 2>/dev/null | grep -qx $(KIND_CLUSTER) || \
 		kind create cluster --name $(KIND_CLUSTER) --config k8s/kind/cluster.yaml
 	@kubectl -n kube-system get deploy metrics-server >/dev/null 2>&1 || { \
@@ -115,7 +115,7 @@ k8s-keda-install: ## 현재 kubectl 컨텍스트에 KEDA 설치 (v2.19: k8s 1.32
 	kubectl -n keda rollout status deployment/keda-metrics-apiserver --timeout=180s
 	kubectl -n keda rollout status deployment/keda-admission --timeout=180s
 
-k8s-local-loadtest: ## kind에 부하 테스트용 overlay 배포 (KEDA 포함, 로그인·읽기 IP 리밋 완화)
+k8s-local-loadtest: ## kind에 부하 테스트용 overlay 배포 (KEDA 포함, 로그인, 읽기 IP 리밋 완화)
 	@kind get clusters 2>/dev/null | grep -qx $(KIND_CLUSTER) || \
 		kind create cluster --name $(KIND_CLUSTER) --config k8s/kind/cluster.yaml
 	$(MAKE) k8s-keda-install
@@ -126,15 +126,25 @@ k8s-local-loadtest: ## kind에 부하 테스트용 overlay 배포 (KEDA 포함, 
 BASE_URL ?= http://localhost:8080
 K6_ARGS ?=
 
+# 재난 시나리오 결과는 loadtest/results/<시나리오 버전>/<시각>-<모드>/ 에 남는다. 버전은 disaster.js의 SCENARIO_ID.
+DISASTER_ID := $(shell sed -n "s/^export const SCENARIO_ID = '\(.*\)';/\1/p" loadtest/disaster.js)
+DISASTER_VARS := USERS BASELINE PEAK MIX PRE RAMP OPEN HOLD COOL RESERVED
+# $(1): 모드 이름(폴더 이름에 붙는다), $(2): 모드별 k6 옵션
+define disaster-run
+	@out=loadtest/results/$(DISASTER_ID)/$$(date +%Y%m%d-%H%M%S)-$(1) && mkdir -p $$out && \
+	k6 run -e BASE_URL=$(BASE_URL) -e OUT=$$out $(2) \
+		$(foreach v,$(DISASTER_VARS),$(if $($(v)),-e $(v)=$($(v)))) $(K6_ARGS) loadtest/disaster.js
+endef
+
 .PHONY: loadtest loadtest-quick loadtest-local
-loadtest: ## k6 재난 시나리오 (약 14분). 먼저 make k8s-local-loadtest
-	k6 run -e BASE_URL=$(BASE_URL) $(if $(USERS),-e USERS=$(USERS)) $(if $(PEAK),-e PEAK=$(PEAK)) $(K6_ARGS) loadtest/disaster.js
+loadtest: ## k6 재난 시나리오 v2, 개장 모양 (약 19분, 구간 길이는 HOLD 등으로 조절). 먼저 make k8s-local-loadtest
+	$(call disaster-run,full,)
 
-loadtest-quick: ## 단축 시나리오 (약 1분 30초, 동작 확인용)
-	k6 run -e BASE_URL=$(BASE_URL) -e QUICK=1 $(if $(USERS),-e USERS=$(USERS)) $(if $(PEAK),-e PEAK=$(PEAK)) $(K6_ARGS) loadtest/disaster.js
+loadtest-quick: ## 단축 시나리오 (구간마다 10초, 약 1분, 동작 확인용)
+	$(call disaster-run,quick,-e QUICK=1)
 
-loadtest-local: ## 노트북용 축소판 (약 14분, USERS=60 PEAK=80). 클라우드 임계치는 그대로
-	k6 run -e BASE_URL=$(BASE_URL) -e PROFILE=local $(if $(USERS),-e USERS=$(USERS)) $(if $(PEAK),-e PEAK=$(PEAK)) $(K6_ARGS) loadtest/disaster.js
+loadtest-local: ## 노트북용 축소판 (약 19분, USERS=60 PEAK=80). 클라우드 임계치는 그대로
+	$(call disaster-run,local,-e PROFILE=local)
 
 # ---------- 응답시간 층별 분석 (loadtest/README.md "응답시간 분해") ----------
 RESULTS := loadtest/results
