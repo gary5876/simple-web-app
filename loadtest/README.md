@@ -33,16 +33,35 @@ TTL에서 멈추므로, 2시간을 기다리지 않고 기울기와 "속도 x �
 
 | 쌓이는 것 | 설정 | PEAK 400 rps에서 2시간 뒤 | 판단 방법 |
 |---|---|---|---|
-| 글쓰기 큐 적체 | 상한 50,000건 | worker 처리가 유입보다 느리면 계속 증가 | `hold` 구간 기울기. 상한까지 남은 시간 = 50,000 / (유입 - 처리) |
+| 글쓰기 큐 적체 | 상한 50,000건 | worker 처리가 유입보다 느리면 계속 증가 | `hold` 구간 측정(아래) |
 | 멱등 키 (Redis) | TTL 10분 | 10분 뒤 약 36,000개에서 멈춤 | 계산 |
 | 글 상태 키 (Redis) | TTL 1시간 | 1시간 뒤 약 216,000개에서 멈춤 | 계산 |
 | 세션 (Redis) | TTL 1일 | 멈추지 않고 약 144,000개 | 계산 |
 | 게시글 (DB) | 지우지 않음 | 약 432,000건 | 계산 |
-| Pod 메모리, 커넥션 | | 누수가 있으면 계속 증가 | `hold` 구간 기울기 |
+| Redis 메모리 | 로컬 256MiB, noeviction | 세션 증가만큼 늘어남 | `hold` 구간 측정(아래) |
+| Pod 메모리 | | 누수가 있으면 계속 증가 | `hold` 구간 측정(아래) |
 
 쓰기 15%(초당 60건), 로그인 5%(초당 20건) 기준이다. TTL은 `services/board/src/board/config.py`, `services/auth/src/auth/config.py` 값이다.
 실제 개장 후 2시간은 최고치가 그대로 유지되지 않고 서서히 줄어들므로, 2시간 내내 PEAK를 유지하는 건 현실보다 가혹한 가정이다.
 그래도 장시간 테스트가 필요하면 `HOLD=2h`로 가끔 돌린다.
+
+계산으로 알 수 없는 값(큐 적체, Redis 실제 메모리, Pod 메모리)은 `collect.py`로 잰다(k8s에서만 동작).
+부하를 거는 동안 다른 터미널에서 `make loadtest-collect`를 켜 두고, 끝나면 `loadtest/results/resources.jsonl`을 그 실행의 결과 폴더로 옮긴다.
+`store` 줄이 큐와 Redis 값이고, `top` 줄이 Pod 메모리다.
+
+```sh
+# 시각, 큐 길이, 가장 오래된 메시지 나이(초), DLQ, Redis 사용 MiB, Redis 상한 MiB(0이면 상한 없음)
+jq -r 'select(.kind=="store") | [(.ts|todate), .queue_length, .queue_lag_seconds, .dlq_size, (.redis_used_mi|floor), (.redis_max_mi|floor)] | @tsv' resources.jsonl
+# 시각, Pod, 메모리 MiB
+jq -r 'select(.kind=="top") | [(.ts|todate), .pod, .mem_mi] | @tsv' resources.jsonl
+```
+
+`hold` 구간은 `meta.json`의 `finished_at`에서 `cool` 길이만큼 앞이 끝이고, 거기서 `hold` 길이만큼 앞이 시작이다. 이 구간의 시작과 끝을 비교한다.
+
+- **큐 길이, 나이**: 일정한 범위를 오르내리면 worker가 따라가고 있는 것이다. 계속 늘면 상한까지 남은 시간 = (50,000 - 끝값) / 분당 증가량.
+- **DLQ**: 0이 아니면 저장에 실패한 글이 있다는 뜻이다.
+- **Redis 메모리**: 2시간 뒤 예상 = 시작값 + (끝값 - 시작값) / hold 길이 x 2시간. 이 값을 상한과 비교한다. 세션 키 때문에 조금씩 느는 것은 정상이다.
+- **Pod 메모리**: hold 동안 Pod마다 계속 늘면 누수를 의심한다. HPA로 Pod 수가 바뀌므로 합계가 아니라 Pod별로 본다.
 
 ### 결과가 버전끼리 섞이지 않게 하는 방법
 
